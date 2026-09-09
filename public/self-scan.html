@@ -1,0 +1,188 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Scan Mandiri KTP - Undian Umroh Jogokariyan</title>
+<link rel="stylesheet" href="/css/style.css" />
+<script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
+</head>
+<body>
+  <header class="topbar">
+    <h1>🙋 Cek / Daftar Undian Mandiri</h1>
+    <p>Letakkan KTP Anda di depan kamera laptop</p>
+  </header>
+
+  <div class="container">
+
+    <div class="card" id="cameraCard">
+      <video id="video" autoplay playsinline muted></video>
+      <canvas id="canvas" style="display:none;"></canvas>
+      <div class="btn-row">
+        <button class="btn btn-primary" id="btnStart">Nyalakan Kamera</button>
+        <button class="btn btn-gold" id="btnCapture" disabled>Foto KTP Saya</button>
+      </div>
+      <div class="hint">Pegang KTP menghadap kamera, pastikan tulisan terbaca jelas dan tidak buram.</div>
+      <div id="status" class="status" style="display:none;"></div>
+    </div>
+
+    <div class="card" id="formCard" style="display:none;">
+      <img id="preview" style="width:100%;border-radius:10px;margin-bottom:10px;" />
+      <p style="text-align:center;color:var(--muted);margin-top:0;">Periksa data berikut, perbaiki jika ada yang salah:</p>
+      <label>NIK (16 digit)</label>
+      <input type="text" id="fNik" inputmode="numeric" maxlength="16" placeholder="16 digit NIK" />
+
+      <label>Nama Lengkap</label>
+      <input type="text" id="fNama" placeholder="Sesuai KTP" />
+
+      <label>Alamat Lengkap</label>
+      <textarea id="fAlamat" placeholder="Sesuai KTP"></textarea>
+
+      <div class="btn-row">
+        <button class="btn btn-outline" id="btnRescan">Ulangi Foto</button>
+        <button class="btn btn-primary" id="btnSave">Konfirmasi</button>
+      </div>
+    </div>
+
+    <div class="card" id="resultCard" style="display:none;">
+      <div class="result-box">
+        <div class="label">Nomor Undian Anda</div>
+        <div class="nomor" id="rNomor">-</div>
+        <div class="nama" id="rNama">-</div>
+        <div id="rBadge"></div>
+      </div>
+      <p style="text-align:center;color:var(--muted);">Catat / foto nomor Anda. Sampai jumpa di pengundian!</p>
+      <button class="btn btn-primary" id="btnNext">Selesai</button>
+    </div>
+
+  </div>
+
+<script src="/js/ktp-ocr.js"></script>
+<script>
+const video = document.getElementById('video');
+const canvas = document.getElementById('canvas');
+const btnStart = document.getElementById('btnStart');
+const btnCapture = document.getElementById('btnCapture');
+const btnRescan = document.getElementById('btnRescan');
+const btnSave = document.getElementById('btnSave');
+const btnNext = document.getElementById('btnNext');
+const statusEl = document.getElementById('status');
+const cameraCard = document.getElementById('cameraCard');
+const formCard = document.getElementById('formCard');
+const resultCard = document.getElementById('resultCard');
+const preview = document.getElementById('preview');
+
+function setStatus(msg, type) {
+  statusEl.style.display = msg ? 'block' : 'none';
+  statusEl.className = 'status ' + (type || 'info');
+  statusEl.innerHTML = msg || '';
+}
+
+async function initCamera() {
+  try {
+    setStatus('Meminta izin kamera...', 'info');
+    await startCamera(video, 'user'); // webcam laptop biasanya kamera depan
+    btnCapture.disabled = false;
+    btnStart.style.display = 'none';
+    setStatus('Kamera siap. Tempelkan KTP ke kamera lalu tekan "Foto KTP Saya".', 'info');
+  } catch (e) {
+    setStatus('Gagal mengakses kamera. Pastikan izin kamera diberikan dan halaman dibuka lewat HTTPS.', 'error');
+  }
+}
+btnStart.addEventListener('click', initCamera);
+
+btnCapture.addEventListener('click', async () => {
+  const dataURL = capturePhoto(video, canvas);
+  preview.src = dataURL;
+  cameraCard.style.display = 'none';
+  formCard.style.display = 'block';
+
+  document.getElementById('fNik').value = '';
+  document.getElementById('fNama').value = '';
+  document.getElementById('fAlamat').value = '';
+
+  const statusBox = document.createElement('div');
+  statusBox.className = 'status info';
+  statusBox.id = 'ocrStatus';
+  statusBox.innerHTML = '<span class="spinner"></span> Membaca teks KTP...';
+  formCard.insertBefore(statusBox, formCard.firstChild.nextSibling.nextSibling);
+
+  try {
+    const text = await runOCR(dataURL, (m) => {
+      if (m.status === 'recognizing text') {
+        statusBox.innerHTML = `<span class="spinner"></span> Membaca teks KTP... ${Math.round((m.progress||0)*100)}%`;
+      }
+    });
+    const parsed = parseKTP(text);
+    document.getElementById('fNik').value = parsed.nik;
+    document.getElementById('fNama').value = parsed.nama;
+    document.getElementById('fAlamat').value = parsed.alamat;
+    statusBox.className = 'status ' + (parsed.nik.length === 16 ? 'info' : 'warn');
+    statusBox.innerHTML = parsed.nik.length === 16
+      ? 'Data terbaca. Silakan periksa sekali lagi sebelum konfirmasi.'
+      : 'NIK belum terbaca sempurna, mohon isi/koreksi manual.';
+  } catch (e) {
+    statusBox.className = 'status error';
+    statusBox.innerHTML = 'Gagal membaca otomatis. Silakan isi data secara manual, atau minta bantuan panitia.';
+  }
+});
+
+btnRescan.addEventListener('click', () => {
+  formCard.style.display = 'none';
+  cameraCard.style.display = 'block';
+  const old = document.getElementById('ocrStatus');
+  if (old) old.remove();
+});
+
+btnSave.addEventListener('click', async () => {
+  const nik = document.getElementById('fNik').value.trim();
+  const nama = document.getElementById('fNama').value.trim();
+  const alamat = document.getElementById('fAlamat').value.trim();
+
+  if (nik.replace(/\D/g,'').length !== 16) { alert('NIK harus 16 digit angka. Mohon periksa kembali.'); return; }
+  if (!nama) { alert('Nama tidak boleh kosong.'); return; }
+  if (!alamat) { alert('Alamat tidak boleh kosong.'); return; }
+
+  btnSave.disabled = true;
+  btnSave.textContent = 'Menyimpan...';
+
+  try {
+    const res = await fetch('/api/register', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ nik, nama, alamat, sumber: 'self-scan' }),
+    });
+    const data = await res.json();
+    if (!res.ok) { alert(data.error || 'Gagal menyimpan.'); return; }
+
+    document.getElementById('rNomor').textContent = data.nomor_undian;
+    document.getElementById('rNama').textContent = data.nama;
+    const badge = document.getElementById('rBadge');
+    badge.innerHTML = data.isNew
+      ? '<span class="badge-new new">✓ Pendaftaran berhasil</span>'
+      : '<span class="badge-new old">ℹ Anda sudah terdaftar — ini nomor undian Anda</span>';
+
+    formCard.style.display = 'none';
+    resultCard.style.display = 'block';
+  } catch (e) {
+    alert('Terjadi kesalahan jaringan. Coba lagi atau hubungi panitia.');
+  } finally {
+    btnSave.disabled = false;
+    btnSave.textContent = 'Konfirmasi';
+  }
+});
+
+btnNext.addEventListener('click', () => {
+  resultCard.style.display = 'none';
+  cameraCard.style.display = 'block';
+  btnStart.style.display = 'inline-block';
+  const old = document.getElementById('ocrStatus');
+  if (old) old.remove();
+  setStatus('', '');
+});
+
+// Auto-start kamera untuk mode kiosk
+window.addEventListener('load', () => setTimeout(initCamera, 500));
+</script>
+</body>
+</html>

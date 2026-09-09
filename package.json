@@ -1,0 +1,13 @@
+{
+  "name": "undian-jogokariyan",
+  "version": "1.0.0",
+  "description": "Aplikasi pendaftaran peserta jalan sehat & undian umroh Masjid Jogokariyan",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "better-sqlite3": "^11.3.0",
+    "express": "^4.19.2"
+  }
+}

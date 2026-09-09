@@ -1,0 +1,110 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Layar Pengundian - Undian Umroh Jogokariyan</title>
+<link rel="stylesheet" href="/css/style.css" />
+</head>
+<body>
+  <header class="topbar">
+    <h1>🎁 Pengundian Umroh</h1>
+    <p>Masukkan nomor undian yang keluar dari gulungan kertas</p>
+    <div class="nav-links"><a href="/index.html">Menu</a><a href="/admin.html">Data Peserta</a></div>
+  </header>
+
+  <div class="container">
+
+    <div class="card pin-gate" id="pinGate">
+      <label>Masukkan PIN Panitia</label>
+      <input type="text" id="pinInput" inputmode="numeric" placeholder="PIN" />
+      <button class="btn btn-primary" id="btnPin" style="margin-top:12px;">Masuk</button>
+      <div id="pinError" class="status error" style="display:none;margin-top:10px;"></div>
+    </div>
+
+    <div id="mainContent" style="display:none;">
+      <div class="card">
+        <label>Nomor Undian</label>
+        <input type="text" id="nomorInput" inputmode="numeric" placeholder="Ketik nomor lalu Enter" autofocus style="font-size:1.6rem;text-align:center;letter-spacing:2px;" />
+      </div>
+
+      <div class="card draw-display" id="resultCard" style="display:none;">
+        <div class="nomor-big" id="rNomor">-</div>
+        <div class="nama-big" id="rNama">-</div>
+        <div class="alamat-big" id="rAlamat">-</div>
+      </div>
+
+      <div class="card status error" id="notFound" style="display:none;text-align:center;font-size:1.3rem;">
+        Nomor tidak ditemukan. Periksa kembali.
+      </div>
+    </div>
+
+  </div>
+
+<script>
+let PIN = sessionStorage.getItem('adminPin') || '';
+const pinGate = document.getElementById('pinGate');
+const mainContent = document.getElementById('mainContent');
+
+async function tryPin(pin) {
+  const res = await fetch('/api/verify-pin?pin=' + encodeURIComponent(pin));
+  const data = await res.json();
+  return data.ok;
+}
+
+async function unlock(pin) {
+  const ok = await tryPin(pin);
+  if (ok) {
+    PIN = pin;
+    sessionStorage.setItem('adminPin', pin);
+    pinGate.style.display = 'none';
+    mainContent.style.display = 'block';
+    document.getElementById('nomorInput').focus();
+  } else {
+    document.getElementById('pinError').style.display = 'block';
+    document.getElementById('pinError').textContent = 'PIN salah, coba lagi.';
+  }
+}
+
+document.getElementById('btnPin').addEventListener('click', () => {
+  unlock(document.getElementById('pinInput').value.trim());
+});
+document.getElementById('pinInput').addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') unlock(e.target.value.trim());
+});
+
+if (PIN) unlock(PIN);
+
+async function lookup(nomor) {
+  const resultCard = document.getElementById('resultCard');
+  const notFound = document.getElementById('notFound');
+  if (!nomor) { resultCard.style.display = 'none'; notFound.style.display = 'none'; return; }
+
+  const res = await fetch('/api/undian/' + encodeURIComponent(nomor), { headers: { 'x-admin-pin': PIN } });
+  if (res.ok) {
+    const data = await res.json();
+    document.getElementById('rNomor').textContent = data.nomor_undian;
+    document.getElementById('rNama').textContent = data.nama;
+    document.getElementById('rAlamat').textContent = data.alamat;
+    resultCard.style.display = 'block';
+    notFound.style.display = 'none';
+  } else {
+    resultCard.style.display = 'none';
+    notFound.style.display = 'block';
+  }
+}
+
+const nomorInput = document.getElementById('nomorInput');
+nomorInput.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') lookup(nomorInput.value.trim());
+});
+nomorInput.addEventListener('input', () => {
+  // Pencarian otomatis begitu nomor lengkap (opsional, tetap bisa pakai Enter)
+  if (nomorInput.value.trim().length >= 1) {
+    clearTimeout(window._t);
+    window._t = setTimeout(() => lookup(nomorInput.value.trim()), 400);
+  }
+});
+</script>
+</body>
+</html>

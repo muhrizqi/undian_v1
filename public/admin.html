@@ -1,0 +1,132 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Data Peserta - Undian Umroh Jogokariyan</title>
+<link rel="stylesheet" href="/css/style.css" />
+</head>
+<body>
+  <header class="topbar">
+    <h1>📋 Data Peserta</h1>
+    <p>Jalan Sehat &amp; Undian Umroh Jogokariyan</p>
+    <div class="nav-links"><a href="/index.html">Menu</a><a href="/draw.html">Layar Undian</a></div>
+  </header>
+
+  <div class="container wide">
+
+    <div class="card pin-gate" id="pinGate">
+      <label>Masukkan PIN Panitia</label>
+      <input type="text" id="pinInput" inputmode="numeric" placeholder="PIN" />
+      <button class="btn btn-primary" id="btnPin" style="margin-top:12px;">Masuk</button>
+      <div id="pinError" class="status error" style="display:none;margin-top:10px;"></div>
+    </div>
+
+    <div id="mainContent" style="display:none;">
+      <div class="stat-row">
+        <div class="stat-pill">Total peserta: <b id="statTotal">-</b></div>
+        <a class="stat-pill" style="text-decoration:none;color:var(--green);" id="exportLink" href="#">⬇ Unduh CSV</a>
+      </div>
+
+      <div class="card" style="margin-bottom:14px;">
+        <input type="search" id="searchInput" placeholder="Cari nomor undian / nama / alamat..." />
+      </div>
+
+      <div class="table-wrap">
+        <table class="data-table">
+          <thead>
+            <tr><th style="width:100px;">No. Undian</th><th>Nama</th><th>Alamat</th></tr>
+          </thead>
+          <tbody id="tbody"></tbody>
+        </table>
+      </div>
+
+      <div class="btn-row" style="margin-top:14px;">
+        <button class="btn btn-outline" id="btnPrev">‹ Sebelumnya</button>
+        <div style="align-self:center;font-size:0.9rem;color:var(--muted);" id="pageInfo">Hal 1</div>
+        <button class="btn btn-outline" id="btnNextPage">Berikutnya ›</button>
+      </div>
+    </div>
+
+  </div>
+
+<script>
+let PIN = sessionStorage.getItem('adminPin') || '';
+let page = 1;
+const pageSize = 50;
+let debounceTimer = null;
+
+const pinGate = document.getElementById('pinGate');
+const mainContent = document.getElementById('mainContent');
+
+async function tryPin(pin) {
+  const res = await fetch('/api/verify-pin?pin=' + encodeURIComponent(pin));
+  const data = await res.json();
+  return data.ok;
+}
+
+async function unlock(pin) {
+  const ok = await tryPin(pin);
+  if (ok) {
+    PIN = pin;
+    sessionStorage.setItem('adminPin', pin);
+    pinGate.style.display = 'none';
+    mainContent.style.display = 'block';
+    loadStats();
+    loadTable();
+  } else {
+    document.getElementById('pinError').style.display = 'block';
+    document.getElementById('pinError').textContent = 'PIN salah, coba lagi.';
+  }
+}
+
+document.getElementById('btnPin').addEventListener('click', () => {
+  unlock(document.getElementById('pinInput').value.trim());
+});
+document.getElementById('pinInput').addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') unlock(e.target.value.trim());
+});
+
+if (PIN) unlock(PIN);
+
+async function loadStats() {
+  const res = await fetch('/api/stats', { headers: { 'x-admin-pin': PIN } });
+  const data = await res.json();
+  document.getElementById('statTotal').textContent = data.total;
+  document.getElementById('exportLink').href = '/api/export.csv?pin=' + encodeURIComponent(PIN);
+}
+
+async function loadTable() {
+  const q = document.getElementById('searchInput').value.trim();
+  const res = await fetch(`/api/participants?q=${encodeURIComponent(q)}&page=${page}&pageSize=${pageSize}`, {
+    headers: { 'x-admin-pin': PIN },
+  });
+  const data = await res.json();
+  const tbody = document.getElementById('tbody');
+  tbody.innerHTML = '';
+  data.rows.forEach((r) => {
+    const tr = document.createElement('tr');
+    tr.innerHTML = `<td>${r.nomor_undian}</td><td>${escapeHtml(r.nama)}</td><td>${escapeHtml(r.alamat)}</td>`;
+    tbody.appendChild(tr);
+  });
+  const totalPages = Math.max(Math.ceil(data.total / pageSize), 1);
+  document.getElementById('pageInfo').textContent = `Hal ${page} / ${totalPages} (${data.total} peserta)`;
+  document.getElementById('btnPrev').disabled = page <= 1;
+  document.getElementById('btnNextPage').disabled = page >= totalPages;
+}
+
+function escapeHtml(s) {
+  const div = document.createElement('div');
+  div.textContent = s;
+  return div.innerHTML;
+}
+
+document.getElementById('searchInput').addEventListener('input', () => {
+  clearTimeout(debounceTimer);
+  debounceTimer = setTimeout(() => { page = 1; loadTable(); }, 300);
+});
+document.getElementById('btnPrev').addEventListener('click', () => { if (page > 1) { page--; loadTable(); } });
+document.getElementById('btnNextPage').addEventListener('click', () => { page++; loadTable(); });
+</script>
+</body>
+</html>
