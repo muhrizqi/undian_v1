@@ -197,3 +197,10 @@ table.data-table tr:nth-child(even) { background: #fafcfa; }
   display: block; text-align: center; margin-top: 10px; background: none; border: none;
   color: var(--muted); text-decoration: underline; font-size: 0.85rem; cursor: pointer;
 }
+.field-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 0 12px; }
+.field-grid label { margin: 12px 0 6px; }
+.field-grid .full { grid-column: 1 / -1; }
+.nik-display {
+  text-align: center; font-family: monospace; font-size: 1.15rem; letter-spacing: 1px;
+  background: #f4f6f4; border-radius: 8px; padding: 8px; color: var(--muted);
+}

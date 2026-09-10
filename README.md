@@ -109,23 +109,22 @@ Tip: buat kode QR dari masing-masing alamat supaya petugas & peserta tinggal sca
 
 ---
 
-## 3. Cara kerja pendaftaran (mode real-time, seperti scan QRIS)
+## 3. Cara kerja pendaftaran
 
 1. Petugas/peserta tekan **"Mulai Scan"** sekali di awal — kamera & mesin baca teks disiapkan (±3-5 detik).
-2. Selanjutnya cukup **tahan KTP di depan kamera**, tidak perlu tekan tombol foto lagi. Sistem membaca teks berulang kali secara otomatis di latar belakang.
-3. Panel kecil di bawah video menampilkan NIK/Nama yang sedang terbaca secara live, supaya petugas bisa melihat prosesnya berjalan.
-4. Begitu NIK yang sama terbaca **2 kali berturut-turut** (mencegah salah simpan akibat satu kali baca yang keliru) dan Nama/Alamat juga terbaca wajar, sistem **otomatis menyimpan**:
+2. Selanjutnya cukup **tahan KTP di depan kamera**, tidak perlu tekan tombol foto. Sistem membaca teks berulang kali secara otomatis di latar belakang, memakai urutan baku field pada KTP Indonesia (NIK → Nama → Tempat/Tgl Lahir → Jenis Kelamin → Alamat → RT/RW → Kel/Desa → Kecamatan → Agama → Status Perkawinan → Pekerjaan) untuk membaca lebih cepat dan akurat dibanding mencari label satu per satu.
+3. Panel kecil di bawah video menampilkan NIK/Nama yang sedang terbaca secara live.
+4. Begitu NIK yang sama terbaca **2 kali berturut-turut** (anti salah-baca) **dan** sebagian besar field lain juga sudah tertangkap (atau setelah beberapa detik mencoba melengkapi), **proses scan berhenti otomatis** dan muncul **kartu konfirmasi** berisi semua data yang terbaca, masih bisa diedit.
+5. Petugas/peserta tinggal periksa sekilas lalu tekan **"✓ Konfirmasi & Simpan"**:
    - Jika NIK **belum pernah terdaftar** → data baru disimpan, diberi nomor undian urut berikutnya.
    - Jika NIK **sudah terdaftar** → tidak dibuat data baru, langsung tampil nomor undian yang sudah ada (mencegah satu orang dapat nomor dobel).
-5. Nomor undian tampil besar ± 3-4 detik sebagai konfirmasi, lalu **otomatis kembali ke mode scan** untuk peserta berikutnya — tidak perlu tekan apa pun.
-6. Field tambahan yang ikut dibaca (kalau tertangkap OCR): RT, RW, Kel/Desa, Kecamatan, Agama, Status Perkawinan, Pekerjaan. Field ini disimpan sebagai data pelengkap tapi **tidak** memblokir penyimpanan kalau tidak terbaca (hanya NIK, Nama, Alamat yang wajib).
+6. Nomor undian tampil besar ± 3-4 detik, lalu **otomatis kembali ke mode scan** untuk peserta berikutnya.
 
-### ⚠️ Karena tidak ada konfirmasi manual, penting untuk tahu ini:
-- OCR bisa salah baca satu-dua karakter (misal 1 digit NIK, atau nama sedikit terpotong), dan sekarang **langsung tersimpan tanpa jeda koreksi**.
-- **Tombol "Batalkan"** muncul di layar hasil selama beberapa detik — kalau data yang tampil jelas salah, langsung tekan ini (berlaku maks. 60 detik setelah tersimpan, tidak perlu PIN).
-- Untuk koreksi setelah lewat 60 detik (baru ketahuan salah belakangan), panitia bisa **edit nama/alamat langsung dari `/admin.html`** (tombol "Edit" di setiap baris tabel, perlu PIN).
-- Kalau KTP sulit terbaca berkali-kali (rusak/pudar/pantulan cahaya), ada tombol **"Isi manual"** di halaman scan untuk mengetik data langsung tanpa menunggu OCR.
-- Disarankan **uji coba dulu dengan beberapa KTP asli** sebelum hari-H, untuk memastikan pencahayaan lokasi & jarak scan cukup baik bagi OCR.
+### Kalau OCR tetap salah baca
+- Sebelum menekan "Konfirmasi & Simpan", semua field di kartu konfirmasi **bisa langsung diedit** — ini kesempatan utama untuk mengoreksi.
+- Kalau baru ketahuan salah setelah tersimpan: tombol **"Batalkan"** di layar hasil (60 detik, tanpa PIN), atau edit lewat `/admin.html` (tombol "Edit" di tabel, perlu PIN) kapan saja setelahnya.
+- Kalau KTP sulit terbaca berkali-kali (rusak/pudar/pantulan cahaya), ada tombol **"Isi manual"** untuk mengetik data langsung.
+- Disarankan **uji coba dulu dengan beberapa KTP asli** sebelum hari-H untuk memastikan pencahayaan & jarak scan di lokasi cukup baik.
 
 ## 4. Saat pengundian
 

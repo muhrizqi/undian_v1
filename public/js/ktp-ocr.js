@@ -48,70 +48,77 @@ async function recognizeFrame(worker, canvasEl) {
   return data.text || '';
 }
 
-/* ---------- PARSING ---------- */
+/* ---------- PARSING (berbasis POSISI, sesuai struktur baku KTP Indonesia) ----------
+   Urutan baku pada KTP: NIK, Nama, Tempat/Tgl Lahir, Jenis Kelamin, Alamat,
+   RT/RW, Kel/Desa, Kecamatan, Agama, Status Perkawinan, Pekerjaan,
+   Kewarganegaraan, Berlaku Hingga.
 
-function findLabelValue(lines, labelPattern, stopPattern) {
-  const idx = lines.findIndex((l) => labelPattern.test(l));
-  if (idx === -1) return '';
-  let val = lines[idx].replace(labelPattern, '').replace(/^[:\-\s]+/, '').trim();
-  if (!val && lines[idx + 1] && !(stopPattern && stopPattern.test(lines[idx + 1]))) {
-    val = lines[idx + 1].trim();
-  }
-  return val;
+   Baris NIK dijadikan JANGKAR (dicari lewat pola 16 digit -- paling stabil
+   dibanding mencari label teks "NIK" yang kadang salah OCR), lalu field-field
+   lain diambil berdasarkan posisi relatif terhadap baris NIK. Ini lebih cepat
+   daripada mencari label satu per satu di seluruh teks. */
+
+function lineValue(line) {
+  if (!line) return '';
+  const idx = line.indexOf(':');
+  return (idx !== -1 ? line.slice(idx + 1) : line).trim();
 }
 
-/* Heuristik parsing teks hasil OCR KTP Indonesia. OCR dari kamera tidak
-   pernah 100% akurat -- karena itu proses simpan-otomatis di scan.html/
-   self-scan.html mensyaratkan hasil baca stabil (sama persis) 2x berturut-turut
-   sebelum benar-benar disimpan, dan data tetap bisa dikoreksi lewat halaman admin. */
+function looksLikeRtRw(line) {
+  return /\d{1,3}\s*\/\s*\d{1,3}/.test(line || '');
+}
+
+const EMPTY_PARSED = {
+  nik: '', nama: '', alamat: '', rt: '', rw: '',
+  kelurahan: '', kecamatan: '', agama: '', status_kawin: '', pekerjaan: '',
+};
+
 function parseKTP(rawText) {
   const text = rawText.replace(/\r/g, '');
   const lines = text.split('\n').map((l) => l.trim()).filter((l) => l.length > 0);
 
-  const nextLabel = /^(nama|tempat|jenis kelamin|alamat|rt\s*\/?\s*rw|kel|kecamatan|agama|status|pekerjaan|kewarganegaraan|berlaku)/i;
+  // 1) NIK = jangkar. Cari baris berisi 16 digit berurutan.
+  const nikIdx = lines.findIndex((l) => /\d{15,17}/.test(l));
+  if (nikIdx === -1) return { ...EMPTY_PARSED };
+  const nik = lines[nikIdx].match(/\d{15,17}/)[0].replace(/\D/g, '').slice(0, 16);
 
-  // NIK: 16 digit berurutan di seluruh teks
-  let nik = '';
-  const nikMatch = text.match(/\b\d{15,17}\b/);
-  if (nikMatch) {
-    nik = nikMatch[0].replace(/\D/g, '').slice(0, 16);
-  } else {
-    const nikLine = lines.find((l) => /nik/i.test(l));
-    if (nikLine) nik = nikLine.replace(/\D/g, '').slice(0, 16);
+  // 2) Nama = tepat 1 baris setelah NIK (struktur baku).
+  const nama = lineValue(lines[nikIdx + 1]);
+
+  // 3) Alamat: cari label "Alamat" di jendela 2-6 baris setelah NIK
+  //    (mengantisipasi Tempat/Tgl Lahir & Jenis Kelamin kadang menyatu/terpisah).
+  let alamatIdx = -1;
+  for (let i = nikIdx + 2; i <= Math.min(nikIdx + 6, lines.length - 1); i++) {
+    if (/^alamat\b/i.test(lines[i])) { alamatIdx = i; break; }
   }
+  if (alamatIdx === -1) alamatIdx = nikIdx + 4; // fallback posisi baku
 
-  const nama = findLabelValue(lines, /^nama\b/i, nextLabel);
-
-  // Alamat: gabungkan baris "Alamat" + baris setelahnya sampai ketemu label lain
-  let alamat = '';
-  const alamatIdx = lines.findIndex((l) => /^alamat\b/i.test(l));
-  if (alamatIdx !== -1) {
-    const parts = [];
-    const first = lines[alamatIdx].replace(/^alamat\s*[:\-]?\s*/i, '').trim();
-    if (first) parts.push(first);
-    for (let i = alamatIdx + 1; i < Math.min(alamatIdx + 4, lines.length); i++) {
-      if (/^(rt\s*\/?\s*rw|kel|kecamatan|agama|status|pekerjaan|kewarganegaraan|berlaku)/i.test(lines[i])) break;
-      parts.push(lines[i]);
-    }
-    alamat = parts.join(', ').replace(/\s{2,}/g, ' ').trim();
+  // 4) Alamat bisa 1-2 baris -- kumpulkan sampai ketemu pola RT/RW.
+  const alamatParts = [lineValue(lines[alamatIdx])];
+  let rtrwIdx = -1;
+  for (let i = alamatIdx + 1; i <= Math.min(alamatIdx + 3, lines.length - 1); i++) {
+    if (looksLikeRtRw(lines[i])) { rtrwIdx = i; break; }
+    alamatParts.push(lines[i]);
   }
+  const alamat = alamatParts.join(', ').replace(/\s{2,}/g, ' ').trim();
 
-  // RT/RW
   let rt = '', rw = '';
-  const rtrwLine = lines.find((l) => /rt\s*\/?\s*rw/i.test(l));
-  if (rtrwLine) {
-    const m = rtrwLine.match(/(\d{1,3})\s*\/\s*(\d{1,3})/);
+  if (rtrwIdx !== -1) {
+    const m = lines[rtrwIdx].match(/(\d{1,3})\s*\/\s*(\d{1,3})/);
     if (m) { rt = m[1]; rw = m[2]; }
+  } else {
+    rtrwIdx = alamatIdx + 1; // fallback posisi
   }
 
-  const kelurahan = findLabelValue(lines, /^kel\s*\/?\s*desa\b/i, nextLabel);
-  const kecamatan = findLabelValue(lines, /^kecamatan\b/i, nextLabel);
-  const agama = findLabelValue(lines, /^agama\b/i, nextLabel);
-  const status_kawin = findLabelValue(lines, /^status\s*perkawinan\b/i, nextLabel);
-  const pekerjaan = findLabelValue(lines, /^pekerjaan\b/i, nextLabel);
+  // 5) Field berikutnya langsung ikut posisi baku setelah RT/RW (tanpa cari label lagi -> cepat).
+  const kelurahan = lineValue(lines[rtrwIdx + 1]);
+  const kecamatan = lineValue(lines[rtrwIdx + 2]);
+  const agama = lineValue(lines[rtrwIdx + 3]);
+  const status_kawin = lineValue(lines[rtrwIdx + 4]);
+  const pekerjaan = lineValue(lines[rtrwIdx + 5]);
 
   return {
-    nik: nik || '',
+    nik,
     nama: (nama || '').toUpperCase(),
     alamat: (alamat || '').toUpperCase(),
     rt: (rt || '').toUpperCase(),
@@ -124,12 +131,36 @@ function parseKTP(rawText) {
   };
 }
 
-/* Data dianggap "layak simpan" kalau minimal NIK 16 digit valid, nama
-   dan alamat cukup panjang untuk masuk akal (bukan sekadar 1-2 huruf noise OCR). */
+/* Data dianggap "layak" kalau minimal NIK 16 digit valid, nama
+   dan alamat cukup panjang untuk masuk akal (bukan sekadar noise OCR). */
 function isPlausible(parsed) {
   return (
     parsed.nik.length === 16 &&
     parsed.nama.replace(/[^A-Z]/g, '').length >= 3 &&
     parsed.alamat.length >= 4
   );
+}
+
+/* Dianggap "lengkap" kalau data wajib valid DAN sebagian besar field
+   tambahan juga sudah tertangkap -- ini yang menentukan kapan proses
+   scan berhenti dan kartu konfirmasi muncul. */
+function isComplete(parsed) {
+  if (!isPlausible(parsed)) return false;
+  const extra = [parsed.kelurahan, parsed.kecamatan, parsed.agama, parsed.status_kawin, parsed.pekerjaan];
+  const filled = extra.filter((v) => v && v.length >= 2).length;
+  return filled >= 3;
+}
+
+/* Gabungkan hasil beberapa frame berturut-turut (selama KTP yang sama masih
+   di depan kamera): kalau satu field masih kosong di "best" tapi frame baru
+   berhasil membacanya, isi. Ini menaikkan peluang mendapat data lengkap
+   walau satu frame tunggal tidak selalu menangkap semua field sekaligus. */
+function mergeParsed(best, incoming) {
+  const merged = { ...best };
+  for (const key of Object.keys(EMPTY_PARSED)) {
+    if ((!merged[key] || merged[key].length < 2) && incoming[key] && incoming[key].length >= 2) {
+      merged[key] = incoming[key];
+    }
+  }
+  return merged;
 }
