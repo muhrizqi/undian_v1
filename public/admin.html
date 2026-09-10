@@ -35,7 +35,7 @@
       <div class="table-wrap">
         <table class="data-table">
           <thead>
-            <tr><th style="width:100px;">No. Undian</th><th>Nama</th><th>Alamat</th></tr>
+            <tr><th style="width:90px;">No. Undian</th><th>Nama</th><th>Alamat</th><th style="width:70px;"></th></tr>
           </thead>
           <tbody id="tbody"></tbody>
         </table>
@@ -106,13 +106,55 @@ async function loadTable() {
   tbody.innerHTML = '';
   data.rows.forEach((r) => {
     const tr = document.createElement('tr');
-    tr.innerHTML = `<td>${r.nomor_undian}</td><td>${escapeHtml(r.nama)}</td><td>${escapeHtml(r.alamat)}</td>`;
+    tr.dataset.nomor = r.nomor_undian;
+    tr.innerHTML = `
+      <td>${r.nomor_undian}</td>
+      <td class="cell-nama">${escapeHtml(r.nama)}</td>
+      <td class="cell-alamat">${escapeHtml(r.alamat)}</td>
+      <td><button class="link-btn" style="margin:0;" onclick="editRow(${r.nomor_undian})">Edit</button></td>
+    `;
     tbody.appendChild(tr);
   });
   const totalPages = Math.max(Math.ceil(data.total / pageSize), 1);
   document.getElementById('pageInfo').textContent = `Hal ${page} / ${totalPages} (${data.total} peserta)`;
   document.getElementById('btnPrev').disabled = page <= 1;
   document.getElementById('btnNextPage').disabled = page >= totalPages;
+}
+
+function editRow(nomor) {
+  const tr = document.querySelector(`tr[data-nomor="${nomor}"]`);
+  if (!tr) return;
+  const namaCell = tr.querySelector('.cell-nama');
+  const alamatCell = tr.querySelector('.cell-alamat');
+  const currentNama = namaCell.textContent;
+  const currentAlamat = alamatCell.textContent;
+
+  namaCell.innerHTML = `<input type="text" value="${escapeAttr(currentNama)}" style="width:100%;padding:6px;" id="editNama${nomor}" />`;
+  alamatCell.innerHTML = `<textarea style="width:100%;padding:6px;min-height:40px;" id="editAlamat${nomor}">${escapeHtml(currentAlamat)}</textarea>`;
+  const actionCell = tr.children[3];
+  actionCell.innerHTML = `<button class="link-btn" style="margin:0;" onclick="saveRow(${nomor})">Simpan</button>`;
+}
+
+async function saveRow(nomor) {
+  const nama = document.getElementById(`editNama${nomor}`).value.trim();
+  const alamat = document.getElementById(`editAlamat${nomor}`).value.trim();
+  if (!nama || !alamat) { alert('Nama dan alamat tidak boleh kosong.'); return; }
+  try {
+    const res = await fetch(`/api/participants/${nomor}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json', 'x-admin-pin': PIN },
+      body: JSON.stringify({ nama, alamat }),
+    });
+    const data = await res.json();
+    if (!res.ok) { alert(data.error || 'Gagal menyimpan perubahan.'); return; }
+    loadTable();
+  } catch (e) {
+    alert('Terjadi kesalahan jaringan.');
+  }
+}
+
+function escapeAttr(s) {
+  return String(s).replace(/"/g, '&quot;');
 }
 
 function escapeHtml(s) {

@@ -10,41 +10,33 @@
 <body>
   <header class="topbar">
     <h1>🙋 Cek / Daftar Undian Mandiri</h1>
-    <p>Letakkan KTP Anda di depan kamera laptop</p>
+    <p>Tempelkan KTP ke kamera laptop, tunggu sebentar</p>
   </header>
 
   <div class="container">
 
-    <div class="card" id="cameraCard">
-      <video id="video" autoplay playsinline muted></video>
-      <canvas id="canvas" style="display:none;"></canvas>
-      <div class="btn-row">
-        <button class="btn btn-primary" id="btnStart">Nyalakan Kamera</button>
-        <button class="btn btn-gold" id="btnCapture" disabled>Foto KTP Saya</button>
-      </div>
-      <div class="hint">Pegang KTP menghadap kamera, pastikan tulisan terbaca jelas dan tidak buram.</div>
+    <div class="card" id="startCard">
+      <button class="btn btn-primary" id="btnStart">Mulai</button>
+      <div class="hint" style="text-align:center;">Kamera akan aktif otomatis (±3-5 detik).</div>
       <div id="status" class="status" style="display:none;"></div>
     </div>
 
-    <div class="card" id="formCard" style="display:none;">
-      <img id="preview" style="width:100%;border-radius:10px;margin-bottom:10px;" />
-      <p style="text-align:center;color:var(--muted);margin-top:0;">Periksa data berikut, perbaiki jika ada yang salah:</p>
-      <label>NIK (16 digit)</label>
-      <input type="text" id="fNik" inputmode="numeric" maxlength="16" placeholder="16 digit NIK" />
-
-      <label>Nama Lengkap</label>
-      <input type="text" id="fNama" placeholder="Sesuai KTP" />
-
-      <label>Alamat Lengkap</label>
-      <textarea id="fAlamat" placeholder="Sesuai KTP"></textarea>
-
-      <div class="btn-row">
-        <button class="btn btn-outline" id="btnRescan">Ulangi Foto</button>
-        <button class="btn btn-primary" id="btnSave">Konfirmasi</button>
+    <div class="card" id="cameraCard" style="display:none;">
+      <div class="video-wrap">
+        <video id="video" autoplay playsinline muted></video>
+        <div class="scan-guide"></div>
+        <div class="scan-state-badge" id="stateBadge">Mencari KTP...</div>
+        <div class="live-panel" id="livePanel">
+          <div class="lp-row"><span class="lp-label">NIK</span><span class="lp-val" id="lpNik">-</span></div>
+          <div class="lp-row"><span class="lp-label">Nama</span><span class="lp-val" id="lpNama">-</span></div>
+        </div>
       </div>
+      <canvas id="canvas" style="display:none;"></canvas>
+      <div class="hint">Pegang KTP tegak lurus menghadap kamera, hindari pantulan cahaya.</div>
+      <button class="link-btn" id="btnManual">Sulit terbaca? Minta bantuan / isi manual</button>
     </div>
 
-    <div class="card" id="resultCard" style="display:none;">
+    <div class="card result-flash" id="resultCard" style="display:none;">
       <div class="result-box">
         <div class="label">Nomor Undian Anda</div>
         <div class="nomor" id="rNomor">-</div>
@@ -52,7 +44,25 @@
         <div id="rBadge"></div>
       </div>
       <p style="text-align:center;color:var(--muted);">Catat / foto nomor Anda. Sampai jumpa di pengundian!</p>
-      <button class="btn btn-primary" id="btnNext">Selesai</button>
+      <div class="countdown-wrap"><div class="countdown-bar" id="countdownBar"></div></div>
+      <div class="btn-row">
+        <button class="btn btn-outline" id="btnUndo">Bukan saya / salah</button>
+        <button class="btn btn-primary" id="btnNext">Selesai</button>
+      </div>
+    </div>
+
+    <div class="card" id="formCard" style="display:none;">
+      <p style="text-align:center;color:var(--muted);margin-top:0;">Isi data KTP secara manual:</p>
+      <label>NIK (16 digit)</label>
+      <input type="text" id="fNik" inputmode="numeric" maxlength="16" placeholder="16 digit NIK" />
+      <label>Nama Lengkap</label>
+      <input type="text" id="fNama" placeholder="Sesuai KTP" />
+      <label>Alamat Lengkap</label>
+      <textarea id="fAlamat" placeholder="Sesuai KTP"></textarea>
+      <div class="btn-row">
+        <button class="btn btn-outline" id="btnBackToScan">Kembali ke Scan</button>
+        <button class="btn btn-primary" id="btnSaveManual">Konfirmasi</button>
+      </div>
     </div>
 
   </div>
@@ -61,16 +71,21 @@
 <script>
 const video = document.getElementById('video');
 const canvas = document.getElementById('canvas');
-const btnStart = document.getElementById('btnStart');
-const btnCapture = document.getElementById('btnCapture');
-const btnRescan = document.getElementById('btnRescan');
-const btnSave = document.getElementById('btnSave');
-const btnNext = document.getElementById('btnNext');
-const statusEl = document.getElementById('status');
+const startCard = document.getElementById('startCard');
 const cameraCard = document.getElementById('cameraCard');
-const formCard = document.getElementById('formCard');
 const resultCard = document.getElementById('resultCard');
-const preview = document.getElementById('preview');
+const formCard = document.getElementById('formCard');
+const statusEl = document.getElementById('status');
+const stateBadge = document.getElementById('stateBadge');
+
+let worker = null;
+let running = false;
+let busy = false;
+let pendingNik = '';
+let pendingCount = 0;
+let pendingParsed = null;
+let lastSavedNomor = null;
+let countdownTimer = null;
 
 function setStatus(msg, type) {
   statusEl.style.display = msg ? 'block' : 'none';
@@ -78,111 +93,203 @@ function setStatus(msg, type) {
   statusEl.innerHTML = msg || '';
 }
 
-async function initCamera() {
+function beep() {
   try {
-    setStatus('Meminta izin kamera...', 'info');
-    await startCamera(video, 'user'); // webcam laptop biasanya kamera depan
-    btnCapture.disabled = false;
-    btnStart.style.display = 'none';
-    setStatus('Kamera siap. Tempelkan KTP ke kamera lalu tekan "Foto KTP Saya".', 'info');
+    const ctx = new (window.AudioContext || window.webkitAudioContext)();
+    const o = ctx.createOscillator();
+    const g = ctx.createGain();
+    o.frequency.value = 880;
+    o.connect(g); g.connect(ctx.destination);
+    g.gain.setValueAtTime(0.15, ctx.currentTime);
+    o.start();
+    o.stop(ctx.currentTime + 0.15);
+  } catch (e) {}
+}
+
+async function begin() {
+  const btn = document.getElementById('btnStart');
+  btn.disabled = true;
+  btn.textContent = 'Menyiapkan...';
+  try {
+    setStatus('<span class="spinner"></span> Meminta izin kamera...', 'info');
+    await startCamera(video, 'user');
+    setStatus('<span class="spinner"></span> Menyiapkan mesin baca teks...', 'info');
+    worker = await createOcrWorker();
+    setStatus('', '');
+    startCard.style.display = 'none';
+    cameraCard.style.display = 'block';
+    running = true;
+    resetPending();
+    scanLoop();
   } catch (e) {
-    setStatus('Gagal mengakses kamera. Pastikan izin kamera diberikan dan halaman dibuka lewat HTTPS.', 'error');
+    console.error(e);
+    setStatus('Gagal menyiapkan kamera. Pastikan izin kamera diberikan (lihat panitia jika perlu bantuan).', 'error');
+    btn.disabled = false;
+    btn.textContent = 'Mulai';
   }
 }
-btnStart.addEventListener('click', initCamera);
+document.getElementById('btnStart').addEventListener('click', begin);
 
-btnCapture.addEventListener('click', async () => {
-  const dataURL = capturePhoto(video, canvas);
-  preview.src = dataURL;
-  cameraCard.style.display = 'none';
-  formCard.style.display = 'block';
+function resetPending() {
+  pendingNik = '';
+  pendingCount = 0;
+  pendingParsed = null;
+  stateBadge.textContent = 'Mencari KTP...';
+  stateBadge.classList.remove('ok');
+}
 
-  document.getElementById('fNik').value = '';
-  document.getElementById('fNama').value = '';
-  document.getElementById('fAlamat').value = '';
-
-  const statusBox = document.createElement('div');
-  statusBox.className = 'status info';
-  statusBox.id = 'ocrStatus';
-  statusBox.innerHTML = '<span class="spinner"></span> Membaca teks KTP...';
-  formCard.insertBefore(statusBox, formCard.firstChild.nextSibling.nextSibling);
-
+async function scanLoop() {
+  if (!running) return;
+  if (busy) { setTimeout(scanLoop, 200); return; }
+  busy = true;
   try {
-    const text = await runOCR(dataURL, (m) => {
-      if (m.status === 'recognizing text') {
-        statusBox.innerHTML = `<span class="spinner"></span> Membaca teks KTP... ${Math.round((m.progress||0)*100)}%`;
-      }
-    });
+    const frame = captureFrame(video, canvas);
+    const text = await recognizeFrame(worker, frame);
     const parsed = parseKTP(text);
-    document.getElementById('fNik').value = parsed.nik;
-    document.getElementById('fNama').value = parsed.nama;
-    document.getElementById('fAlamat').value = parsed.alamat;
-    statusBox.className = 'status ' + (parsed.nik.length === 16 ? 'info' : 'warn');
-    statusBox.innerHTML = parsed.nik.length === 16
-      ? 'Data terbaca. Silakan periksa sekali lagi sebelum konfirmasi.'
-      : 'NIK belum terbaca sempurna, mohon isi/koreksi manual.';
+
+    document.getElementById('lpNik').textContent = parsed.nik || '-';
+    document.getElementById('lpNama').textContent = parsed.nama || '-';
+
+    if (isPlausible(parsed)) {
+      if (parsed.nik === pendingNik) {
+        pendingCount++;
+      } else {
+        pendingNik = parsed.nik;
+        pendingCount = 1;
+      }
+      pendingParsed = parsed;
+      stateBadge.textContent = pendingCount >= 2 ? 'Terbaca! Menyimpan...' : 'Membaca... tahan posisi';
+      stateBadge.classList.toggle('ok', pendingCount >= 2);
+
+      if (pendingCount >= 2) {
+        running = false;
+        await saveParsed(pendingParsed);
+        busy = false;
+        return;
+      }
+    }
   } catch (e) {
-    statusBox.className = 'status error';
-    statusBox.innerHTML = 'Gagal membaca otomatis. Silakan isi data secara manual, atau minta bantuan panitia.';
+    console.error('OCR error:', e);
   }
-});
+  busy = false;
+  if (running) setTimeout(scanLoop, 180);
+}
 
-btnRescan.addEventListener('click', () => {
-  formCard.style.display = 'none';
-  cameraCard.style.display = 'block';
-  const old = document.getElementById('ocrStatus');
-  if (old) old.remove();
-});
-
-btnSave.addEventListener('click', async () => {
-  const nik = document.getElementById('fNik').value.trim();
-  const nama = document.getElementById('fNama').value.trim();
-  const alamat = document.getElementById('fAlamat').value.trim();
-
-  if (nik.replace(/\D/g,'').length !== 16) { alert('NIK harus 16 digit angka. Mohon periksa kembali.'); return; }
-  if (!nama) { alert('Nama tidak boleh kosong.'); return; }
-  if (!alamat) { alert('Alamat tidak boleh kosong.'); return; }
-
-  btnSave.disabled = true;
-  btnSave.textContent = 'Menyimpan...';
-
+async function saveParsed(parsed) {
   try {
     const res = await fetch('/api/register', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ nik, nama, alamat, sumber: 'self-scan' }),
+      body: JSON.stringify({ ...parsed, sumber: 'self-scan-realtime' }),
+    });
+    const data = await res.json();
+    if (!res.ok) {
+      resetPending();
+      running = true;
+      setTimeout(scanLoop, 300);
+      return;
+    }
+    showResult(data);
+  } catch (e) {
+    resetPending();
+    running = true;
+    setTimeout(scanLoop, 500);
+  }
+}
+
+function showResult(data) {
+  beep();
+  lastSavedNomor = data.nomor_undian;
+  cameraCard.style.display = 'none';
+  document.getElementById('rNomor').textContent = data.nomor_undian;
+  document.getElementById('rNama').textContent = data.nama;
+  const badge = document.getElementById('rBadge');
+  badge.innerHTML = data.isNew
+    ? '<span class="badge-new new">✓ Pendaftaran berhasil</span>'
+    : '<span class="badge-new old">ℹ Anda sudah terdaftar — ini nomor Anda</span>';
+  resultCard.style.display = 'block';
+
+  const bar = document.getElementById('countdownBar');
+  bar.style.transition = 'none';
+  bar.style.width = '100%';
+  requestAnimationFrame(() => {
+    bar.style.transition = 'width 4s linear';
+    bar.style.width = '0%';
+  });
+  clearTimeout(countdownTimer);
+  countdownTimer = setTimeout(goNext, 4000);
+}
+
+function goNext() {
+  clearTimeout(countdownTimer);
+  resultCard.style.display = 'none';
+  cameraCard.style.display = 'block';
+  resetPending();
+  running = true;
+  scanLoop();
+}
+document.getElementById('btnNext').addEventListener('click', goNext);
+
+document.getElementById('btnUndo').addEventListener('click', async () => {
+  if (!lastSavedNomor) return goNext();
+  try {
+    await fetch(`/api/participants/${lastSavedNomor}/undo`, { method: 'DELETE' });
+  } catch (e) {}
+  goNext();
+});
+
+document.getElementById('btnManual').addEventListener('click', () => {
+  running = false;
+  cameraCard.style.display = 'none';
+  formCard.style.display = 'block';
+  document.getElementById('fNik').value = '';
+  document.getElementById('fNama').value = '';
+  document.getElementById('fAlamat').value = '';
+});
+
+document.getElementById('btnBackToScan').addEventListener('click', () => {
+  formCard.style.display = 'none';
+  cameraCard.style.display = 'block';
+  resetPending();
+  running = true;
+  scanLoop();
+});
+
+document.getElementById('btnSaveManual').addEventListener('click', async () => {
+  const nik = document.getElementById('fNik').value.trim();
+  const nama = document.getElementById('fNama').value.trim();
+  const alamat = document.getElementById('fAlamat').value.trim();
+
+  if (nik.replace(/\D/g, '').length !== 16) { alert('NIK harus 16 digit angka.'); return; }
+  if (!nama) { alert('Nama tidak boleh kosong.'); return; }
+  if (!alamat) { alert('Alamat tidak boleh kosong.'); return; }
+
+  const btn = document.getElementById('btnSaveManual');
+  btn.disabled = true; btn.textContent = 'Menyimpan...';
+  try {
+    const res = await fetch('/api/register', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ nik, nama, alamat, sumber: 'self-scan-manual' }),
     });
     const data = await res.json();
     if (!res.ok) { alert(data.error || 'Gagal menyimpan.'); return; }
-
-    document.getElementById('rNomor').textContent = data.nomor_undian;
-    document.getElementById('rNama').textContent = data.nama;
-    const badge = document.getElementById('rBadge');
-    badge.innerHTML = data.isNew
-      ? '<span class="badge-new new">✓ Pendaftaran berhasil</span>'
-      : '<span class="badge-new old">ℹ Anda sudah terdaftar — ini nomor undian Anda</span>';
-
     formCard.style.display = 'none';
-    resultCard.style.display = 'block';
+    showResult(data);
   } catch (e) {
     alert('Terjadi kesalahan jaringan. Coba lagi atau hubungi panitia.');
   } finally {
-    btnSave.disabled = false;
-    btnSave.textContent = 'Konfirmasi';
+    btn.disabled = false; btn.textContent = 'Konfirmasi';
   }
 });
 
-btnNext.addEventListener('click', () => {
-  resultCard.style.display = 'none';
-  cameraCard.style.display = 'block';
-  btnStart.style.display = 'inline-block';
-  const old = document.getElementById('ocrStatus');
-  if (old) old.remove();
-  setStatus('', '');
+window.addEventListener('beforeunload', () => {
+  stopCamera();
+  if (worker) worker.terminate();
 });
 
-// Auto-start kamera untuk mode kiosk
-window.addEventListener('load', () => setTimeout(initCamera, 500));
+// Mode kiosk: mulai otomatis begitu halaman dibuka
+window.addEventListener('load', () => setTimeout(begin, 400));
 </script>
 </body>
 </html>

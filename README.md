@@ -109,15 +109,23 @@ Tip: buat kode QR dari masing-masing alamat supaya petugas & peserta tinggal sca
 
 ---
 
-## 3. Cara kerja pendaftaran
+## 3. Cara kerja pendaftaran (mode real-time, seperti scan QRIS)
 
-1. Kamera memotret KTP.
-2. Teks pada foto dibaca otomatis (OCR) langsung di browser (tidak dikirim ke server luar).
-3. Hasil bacaan (NIK, Nama, Alamat) ditampilkan di form yang **bisa diedit** — penting, karena OCR dari foto kamera tidak selalu 100% akurat, apalagi jika KTP buram/silau.
-4. Setelah dikonfirmasi dan disimpan:
-   - Jika NIK **belum pernah terdaftar** → data disimpan, diberi nomor undian baru (urut 1, 2, 3, ...).
-   - Jika NIK **sudah terdaftar** → tidak dibuat data baru, langsung ditampilkan nomor undian yang sudah ada (mencegah satu orang dapat nomor dobel).
-5. Nomor undian ditampilkan besar di layar sebagai konfirmasi data tersimpan.
+1. Petugas/peserta tekan **"Mulai Scan"** sekali di awal — kamera & mesin baca teks disiapkan (±3-5 detik).
+2. Selanjutnya cukup **tahan KTP di depan kamera**, tidak perlu tekan tombol foto lagi. Sistem membaca teks berulang kali secara otomatis di latar belakang.
+3. Panel kecil di bawah video menampilkan NIK/Nama yang sedang terbaca secara live, supaya petugas bisa melihat prosesnya berjalan.
+4. Begitu NIK yang sama terbaca **2 kali berturut-turut** (mencegah salah simpan akibat satu kali baca yang keliru) dan Nama/Alamat juga terbaca wajar, sistem **otomatis menyimpan**:
+   - Jika NIK **belum pernah terdaftar** → data baru disimpan, diberi nomor undian urut berikutnya.
+   - Jika NIK **sudah terdaftar** → tidak dibuat data baru, langsung tampil nomor undian yang sudah ada (mencegah satu orang dapat nomor dobel).
+5. Nomor undian tampil besar ± 3-4 detik sebagai konfirmasi, lalu **otomatis kembali ke mode scan** untuk peserta berikutnya — tidak perlu tekan apa pun.
+6. Field tambahan yang ikut dibaca (kalau tertangkap OCR): RT, RW, Kel/Desa, Kecamatan, Agama, Status Perkawinan, Pekerjaan. Field ini disimpan sebagai data pelengkap tapi **tidak** memblokir penyimpanan kalau tidak terbaca (hanya NIK, Nama, Alamat yang wajib).
+
+### ⚠️ Karena tidak ada konfirmasi manual, penting untuk tahu ini:
+- OCR bisa salah baca satu-dua karakter (misal 1 digit NIK, atau nama sedikit terpotong), dan sekarang **langsung tersimpan tanpa jeda koreksi**.
+- **Tombol "Batalkan"** muncul di layar hasil selama beberapa detik — kalau data yang tampil jelas salah, langsung tekan ini (berlaku maks. 60 detik setelah tersimpan, tidak perlu PIN).
+- Untuk koreksi setelah lewat 60 detik (baru ketahuan salah belakangan), panitia bisa **edit nama/alamat langsung dari `/admin.html`** (tombol "Edit" di setiap baris tabel, perlu PIN).
+- Kalau KTP sulit terbaca berkali-kali (rusak/pudar/pantulan cahaya), ada tombol **"Isi manual"** di halaman scan untuk mengetik data langsung tanpa menunggu OCR.
+- Disarankan **uji coba dulu dengan beberapa KTP asli** sebelum hari-H, untuk memastikan pencahayaan lokasi & jarak scan cukup baik bagi OCR.
 
 ## 4. Saat pengundian
 
@@ -125,13 +133,13 @@ Panitia membuka `/draw.html` di laptop yang disambungkan ke proyektor/layar besa
 
 ## 5. Data & backup
 
-- Semua data tersimpan di file `data.db` di folder proyek (database SQLite).
-- **Backup**: sesekali copy file `data.db` (dan folder `data.db-wal`, `data.db-shm` jika ada) ke tempat lain / flashdisk, terutama sebelum sesi pengundian.
-- Unduh rekap CSV kapan saja lewat tombol "Unduh CSV" di halaman `/admin.html`.
+- Semua data tersimpan di file `data.db` (SQLite) — di Coolify berada di volume `/app/data` yang Anda mount di langkah 4 pada bagian Coolify di atas.
+- **Backup**: sesekali unduh rekap CSV lewat tombol "Unduh CSV" di halaman `/admin.html`, terutama sebelum sesi pengundian.
+- Riwayat perubahan data (edit oleh admin) tercatat di kolom `updated_at`, meski tidak ditampilkan di tabel — bisa dicek langsung di `data.db` kalau diperlukan.
 
 ## 6. Kapasitas
 
-Dirancang untuk ±1.500 peserta dan puluhan petugas memindai bersamaan. Database SQLite dengan mode WAL yang dipakai cukup untuk beban ini di satu laptop server. Jika nanti dipakai untuk acara jauh lebih besar (puluhan ribu peserta / server terpisah dari beberapa lokasi), sebaiknya migrasi ke PostgreSQL — beri tahu saya jika perlu bantuan.
+Dirancang untuk ±1.500 peserta dan puluhan petugas memindai bersamaan. Database SQLite dengan mode WAL yang dipakai cukup untuk beban ini di satu laptop server / satu container Coolify. Jika nanti dipakai untuk acara jauh lebih besar (puluhan ribu peserta / server terpisah dari beberapa lokasi), sebaiknya migrasi ke PostgreSQL — beri tahu saya jika perlu bantuan.
 
 ## 7. Keamanan
 

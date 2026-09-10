@@ -33,6 +33,23 @@ CREATE INDEX IF NOT EXISTS idx_nama ON participants(nama);
 CREATE INDEX IF NOT EXISTS idx_alamat ON participants(alamat);
 `);
 
+// Migrasi ringan: tambahkan kolom baru kalau database lama (yang sudah berjalan
+// di server sebelum kolom ini ada) belum punya kolomnya. Data lama tidak hilang.
+function ensureColumn(table, column, definition) {
+  const cols = db.prepare(`PRAGMA table_info(${table})`).all().map((c) => c.name);
+  if (!cols.includes(column)) {
+    db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
+  }
+}
+ensureColumn('participants', 'rt', 'TEXT');
+ensureColumn('participants', 'rw', 'TEXT');
+ensureColumn('participants', 'kelurahan', 'TEXT');
+ensureColumn('participants', 'kecamatan', 'TEXT');
+ensureColumn('participants', 'agama', 'TEXT');
+ensureColumn('participants', 'status_kawin', 'TEXT');
+ensureColumn('participants', 'pekerjaan', 'TEXT');
+ensureColumn('participants', 'updated_at', 'TEXT');
+
 // ---------- SIMPLE PIN PROTECTION FOR ADMIN/DRAW DATA ----------
 // Ganti PIN ini via environment variable ADMIN_PIN saat menjalankan server,
 // contoh: ADMIN_PIN=778899 npm start
@@ -63,29 +80,38 @@ function nextNomorUndian() {
 }
 
 const insertStmt = db.prepare(`
-  INSERT INTO participants (nik, nama, alamat, nomor_undian, petugas, sumber, created_at)
-  VALUES (?, ?, ?, ?, ?, ?, ?)
+  INSERT INTO participants
+    (nik, nama, alamat, nomor_undian, petugas, sumber, created_at,
+     rt, rw, kelurahan, kecamatan, agama, status_kawin, pekerjaan)
+  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 `);
 
 // Semua langkah di bawah ini SINKRON (better-sqlite3) dan dibungkus transaction,
-// sehingga aman meski banyak petugas mengirim data hampir bersamaan.
-const registerTx = db.transaction((nik, nama, alamat, petugas, sumber) => {
+// sehingga aman meski banyak petugas/peserta mengirim data hampir bersamaan.
+const registerTx = db.transaction((fields) => {
+  const { nik, nama, alamat, petugas, sumber, rt, rw, kelurahan, kecamatan, agama, status_kawin, pekerjaan } = fields;
   const existing = db.prepare('SELECT * FROM participants WHERE nik = ?').get(nik);
   if (existing) {
     return { isNew: false, data: existing };
   }
   const nomor = nextNomorUndian();
   const created_at = new Date().toISOString();
-  insertStmt.run(nik, nama, alamat, nomor, petugas || null, sumber || null, created_at);
+  insertStmt.run(
+    nik, nama, alamat, nomor, petugas || null, sumber || null, created_at,
+    rt || null, rw || null, kelurahan || null, kecamatan || null,
+    agama || null, status_kawin || null, pekerjaan || null
+  );
   const data = db.prepare('SELECT * FROM participants WHERE nik = ?').get(nik);
   return { isNew: true, data };
 });
 
 // ---------- API: REGISTER / SCAN ----------
-// Dipakai oleh halaman /scan.html (petugas) dan /self-scan.html (peserta mandiri)
+// Dipakai oleh halaman /scan.html (petugas) dan /self-scan.html (peserta mandiri).
+// Field selain nik/nama/alamat bersifat opsional (hasil OCR tambahan) --
+// tidak menggagalkan pendaftaran kalau kosong/tidak terbaca.
 app.post('/api/register', (req, res) => {
   try {
-    let { nik, nama, alamat, petugas, sumber } = req.body || {};
+    let { nik, nama, alamat, petugas, sumber, rt, rw, kelurahan, kecamatan, agama, status_kawin, pekerjaan } = req.body || {};
     if (!nik || !nama || !alamat) {
       return res.status(400).json({ error: 'NIK, nama, dan alamat wajib diisi.' });
     }
@@ -98,8 +124,13 @@ app.post('/api/register', (req, res) => {
     if (!nama || !alamat) {
       return res.status(400).json({ error: 'Nama dan alamat tidak boleh kosong.' });
     }
+    const clean = (v) => (v ? String(v).trim().toUpperCase() : '');
 
-    const result = registerTx(nik, nama, alamat, petugas, sumber);
+    const result = registerTx({
+      nik, nama, alamat, petugas, sumber,
+      rt: clean(rt), rw: clean(rw), kelurahan: clean(kelurahan), kecamatan: clean(kecamatan),
+      agama: clean(agama), status_kawin: clean(status_kawin), pekerjaan: clean(pekerjaan),
+    });
     res.json({
       isNew: result.isNew,
       nomor_undian: result.data.nomor_undian,
@@ -110,6 +141,41 @@ app.post('/api/register', (req, res) => {
     console.error(err);
     res.status(500).json({ error: 'Terjadi kesalahan server. Coba lagi.' });
   }
+});
+
+// ---------- API: EDIT PESERTA (panitia, untuk perbaiki hasil OCR yang salah) ----------
+app.patch('/api/participants/:nomor', requireAdminPin, (req, res) => {
+  const nomor = parseInt(req.params.nomor);
+  if (!nomor) return res.status(400).json({ error: 'Nomor tidak valid.' });
+  const existing = db.prepare('SELECT * FROM participants WHERE nomor_undian = ?').get(nomor);
+  if (!existing) return res.status(404).json({ error: 'Peserta tidak ditemukan.' });
+
+  let { nama, alamat } = req.body || {};
+  nama = nama !== undefined ? String(nama).trim().toUpperCase() : existing.nama;
+  alamat = alamat !== undefined ? String(alamat).trim().toUpperCase() : existing.alamat;
+  if (!nama || !alamat) return res.status(400).json({ error: 'Nama dan alamat tidak boleh kosong.' });
+
+  db.prepare('UPDATE participants SET nama = ?, alamat = ?, updated_at = ? WHERE nomor_undian = ?')
+    .run(nama, alamat, new Date().toISOString(), nomor);
+
+  res.json({ ok: true, nomor_undian: nomor, nama, alamat });
+});
+
+// ---------- API: BATALKAN HASIL SCAN TERAKHIR (tanpa PIN, hanya dalam 60 detik) ----------
+// Untuk kasus auto-save salah baca yang langsung ketahuan oleh petugas/peserta.
+// Tidak butuh PIN admin supaya cepat dipakai di lapangan, tapi dibatasi waktu
+// supaya tidak bisa dipakai menghapus data lama.
+app.delete('/api/participants/:nomor/undo', (req, res) => {
+  const nomor = parseInt(req.params.nomor);
+  if (!nomor) return res.status(400).json({ error: 'Nomor tidak valid.' });
+  const row = db.prepare('SELECT * FROM participants WHERE nomor_undian = ?').get(nomor);
+  if (!row) return res.status(404).json({ error: 'Tidak ditemukan.' });
+  const ageMs = Date.now() - new Date(row.created_at).getTime();
+  if (ageMs > 60000) {
+    return res.status(403).json({ error: 'Waktu pembatalan sudah lewat. Hubungi panitia untuk koreksi lewat halaman admin.' });
+  }
+  db.prepare('DELETE FROM participants WHERE nomor_undian = ?').run(nomor);
+  res.json({ ok: true });
 });
 
 // ---------- API: LIST / SEARCH PARTICIPANTS (untuk halaman admin) ----------
@@ -156,12 +222,16 @@ app.get('/api/stats', requireAdminPin, (req, res) => {
 // ---------- API: EXPORT CSV ----------
 app.get('/api/export.csv', requireAdminPin, (req, res) => {
   const rows = db
-    .prepare('SELECT nomor_undian, nama, alamat, nik, created_at FROM participants ORDER BY nomor_undian ASC')
+    .prepare(`SELECT nomor_undian, nama, alamat, nik, rt, rw, kelurahan, kecamatan, agama, status_kawin, pekerjaan, created_at
+               FROM participants ORDER BY nomor_undian ASC`)
     .all();
-  const esc = (s) => `"${String(s).replace(/"/g, '""')}"`;
-  let csv = 'nomor_undian,nama,alamat,nik,created_at\n';
+  const esc = (s) => `"${String(s || '').replace(/"/g, '""')}"`;
+  let csv = 'nomor_undian,nama,alamat,nik,rt,rw,kelurahan,kecamatan,agama,status_kawin,pekerjaan,created_at\n';
   for (const r of rows) {
-    csv += [r.nomor_undian, esc(r.nama), esc(r.alamat), r.nik, r.created_at].join(',') + '\n';
+    csv += [
+      r.nomor_undian, esc(r.nama), esc(r.alamat), r.nik, esc(r.rt), esc(r.rw),
+      esc(r.kelurahan), esc(r.kecamatan), esc(r.agama), esc(r.status_kawin), esc(r.pekerjaan), r.created_at,
+    ].join(',') + '\n';
   }
   res.setHeader('Content-Type', 'text/csv; charset=utf-8');
   res.setHeader('Content-Disposition', 'attachment; filename=peserta_undian_jogokariyan.csv');
