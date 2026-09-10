@@ -10,7 +10,7 @@
 <body>
   <header class="topbar">
     <h1>📷 Scan KTP — Petugas</h1>
-    <p>Arahkan KTP ke kamera, sistem berhenti otomatis saat data lengkap</p>
+    <p>Posisikan KTP tepat di dalam kotak putih</p>
     <div class="nav-links"><a href="/index.html">Menu</a><a href="/admin.html">Data Peserta</a></div>
   </header>
 
@@ -30,16 +30,14 @@
     <div class="card" id="cameraCard" style="display:none;">
       <div class="video-wrap">
         <video id="video" autoplay playsinline muted></video>
-        <div class="scan-guide"></div>
+        <div class="guide-overlay" id="guideOverlay"></div>
         <div class="scan-state-badge" id="stateBadge">Mencari KTP...</div>
         <div class="live-panel" id="livePanel">
           <div class="lp-row"><span class="lp-label">NIK</span><span class="lp-val" id="lpNik">-</span></div>
           <div class="lp-row"><span class="lp-label">Nama</span><span class="lp-val" id="lpNama">-</span></div>
-          <div class="lp-row"><span class="lp-label">Alamat</span><span class="lp-val" id="lpAlamat">-</span></div>
         </div>
       </div>
-      <canvas id="canvas" style="display:none;"></canvas>
-      <div class="hint">Tahan KTP stabil di dalam kotak putus-putus sampai berhenti otomatis. Hindari silau/blur.</div>
+      <div class="hint">Ratakan sisi KTP dengan kotak putih, sejajar &amp; memenuhi kotak (posisi mendatar/landscape). Hindari silau.</div>
       <button class="link-btn" id="btnManual">KTP sulit terbaca? Isi manual</button>
     </div>
 
@@ -104,7 +102,7 @@
 <script src="/js/ktp-ocr.js"></script>
 <script>
 const video = document.getElementById('video');
-const canvas = document.getElementById('canvas');
+const guideOverlay = document.getElementById('guideOverlay');
 const startCard = document.getElementById('startCard');
 const cameraCard = document.getElementById('cameraCard');
 const confirmCard = document.getElementById('confirmCard');
@@ -114,8 +112,10 @@ const statusEl = document.getElementById('status');
 const stateBadge = document.getElementById('stateBadge');
 
 let worker = null;
-let running = false;    // loop kamera aktif
-let busy = false;       // sedang memproses 1 frame
+let running = false;
+let busy = false;
+let guideRect = null;
+let phase = 'searching'; // 'searching' | 'extracting'
 let stableNik = '';
 let stableCount = 0;
 let bestParsed = null;
@@ -123,7 +123,7 @@ let graceDeadline = null;
 let lastSavedNomor = null;
 let countdownTimer = null;
 
-const GRACE_MS = 4000; // setelah NIK stabil 2x, beri waktu ini untuk melengkapi field lain sebelum tetap lanjut
+const GRACE_MS = 5000; // waktu maksimal fase "extracting" mencoba melengkapi field lain
 
 function setStatus(msg, type) {
   statusEl.style.display = msg ? 'block' : 'none';
@@ -156,6 +156,10 @@ document.getElementById('btnStart').addEventListener('click', async () => {
     setStatus('', '');
     startCard.style.display = 'none';
     cameraCard.style.display = 'block';
+
+    guideRect = computeGuideRect(video.videoWidth, video.videoHeight);
+    renderGuideOverlay(guideOverlay, guideRect);
+
     resetScanState();
     running = true;
     scanLoop();
@@ -168,12 +172,15 @@ document.getElementById('btnStart').addEventListener('click', async () => {
 });
 
 function resetScanState() {
+  phase = 'searching';
   stableNik = '';
   stableCount = 0;
   bestParsed = null;
   graceDeadline = null;
+  document.getElementById('lpNik').textContent = '-';
+  document.getElementById('lpNama').textContent = '-';
   stateBadge.textContent = 'Mencari KTP...';
-  stateBadge.classList.remove('ok');
+  setGuideState(guideOverlay, '');
 }
 
 async function scanLoop() {
@@ -181,34 +188,32 @@ async function scanLoop() {
   if (busy) { setTimeout(scanLoop, 200); return; }
   busy = true;
   try {
-    const frame = captureFrame(video, canvas);
-    const text = await recognizeFrame(worker, frame);
-    const parsed = parseKTP(text);
-
-    document.getElementById('lpNik').textContent = parsed.nik || '-';
-    document.getElementById('lpNama').textContent = parsed.nama || '-';
-    document.getElementById('lpAlamat').textContent = parsed.alamat || '-';
-
-    if (isPlausible(parsed)) {
-      if (parsed.nik === stableNik) {
-        stableCount++;
+    if (phase === 'searching') {
+      const nik = await scanNikOnly(worker, video, guideRect);
+      document.getElementById('lpNik').textContent = nik || '-';
+      if (nik.length === 16) {
+        if (nik === stableNik) stableCount++; else { stableNik = nik; stableCount = 1; }
+        if (stableCount >= 2) {
+          phase = 'extracting';
+          bestParsed = { ...EMPTY_PARSED, nik: stableNik };
+          graceDeadline = Date.now() + GRACE_MS;
+          stateBadge.textContent = 'NIK terkunci, melengkapi data...';
+          setGuideState(guideOverlay, 'ok');
+        } else {
+          stateBadge.textContent = 'Membaca NIK...';
+        }
       } else {
-        stableNik = parsed.nik;
-        stableCount = 1;
-        bestParsed = null; // KTP beda terdeteksi -> mulai akumulasi ulang
+        stateBadge.textContent = 'Mencari KTP...';
       }
-      bestParsed = bestParsed ? mergeParsed(bestParsed, parsed) : { ...parsed };
-
-      const coreStable = stableCount >= 2;
-      if (coreStable && !graceDeadline) graceDeadline = Date.now() + GRACE_MS;
-
-      stateBadge.textContent = coreStable ? 'Melengkapi data...' : 'Membaca... tahan posisi';
-      stateBadge.classList.toggle('ok', coreStable);
+    } else if (phase === 'extracting') {
+      const other = await scanOtherFields(worker, video, guideRect);
+      bestParsed = mergeParsed(bestParsed, { nik: stableNik, ...other });
+      document.getElementById('lpNama').textContent = bestParsed.nama || '-';
 
       const complete = isComplete(bestParsed);
-      const graceExpired = graceDeadline && Date.now() > graceDeadline;
+      const graceExpired = Date.now() > graceDeadline;
 
-      if (coreStable && (complete || graceExpired)) {
+      if (complete || graceExpired) {
         running = false;
         busy = false;
         showConfirm(bestParsed);
@@ -219,7 +224,7 @@ async function scanLoop() {
     console.error('OCR error:', e);
   }
   busy = false;
-  if (running) setTimeout(scanLoop, 180);
+  if (running) setTimeout(scanLoop, 220);
 }
 
 function showConfirm(parsed) {

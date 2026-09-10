@@ -112,19 +112,24 @@ Tip: buat kode QR dari masing-masing alamat supaya petugas & peserta tinggal sca
 ## 3. Cara kerja pendaftaran
 
 1. Petugas/peserta tekan **"Mulai Scan"** sekali di awal — kamera & mesin baca teks disiapkan (±3-5 detik).
-2. Selanjutnya cukup **tahan KTP di depan kamera**, tidak perlu tekan tombol foto. Sistem membaca teks berulang kali secara otomatis di latar belakang, memakai urutan baku field pada KTP Indonesia (NIK → Nama → Tempat/Tgl Lahir → Jenis Kelamin → Alamat → RT/RW → Kel/Desa → Kecamatan → Agama → Status Perkawinan → Pekerjaan) untuk membaca lebih cepat dan akurat dibanding mencari label satu per satu.
-3. Panel kecil di bawah video menampilkan NIK/Nama yang sedang terbaca secara live.
-4. Begitu NIK yang sama terbaca **2 kali berturut-turut** (anti salah-baca) **dan** sebagian besar field lain juga sudah tertangkap (atau setelah beberapa detik mencoba melengkapi), **proses scan berhenti otomatis** dan muncul **kartu konfirmasi** berisi semua data yang terbaca, masih bisa diedit.
-5. Petugas/peserta tinggal periksa sekilas lalu tekan **"✓ Konfirmasi & Simpan"**:
+2. Di layar muncul **kotak putih berbentuk KTP** dengan kotak-kotak kuning putus-putus menandai posisi NIK, Nama, Alamat, dst. — posisikan kartu fisik supaya pas mengisi kotak putih tersebut (mendatar/landscape).
+3. Sistem membaca **tiap kotak secara terpisah** (bukan membaca seluruh kartu sekaligus dan menebak urutan baris) — jauh lebih tahan terhadap kegagalan baca sebagian kartu, karena satu kotak gagal tidak mengacaukan kotak lainnya.
+   - Tahap pertama hanya membaca kotak **NIK** berulang kali (ringan &amp; cepat) sampai terbaca stabil 2x berturut-turut.
+   - Begitu NIK terkunci (kotak jadi hijau), baru kotak-kotak lain (Nama, Alamat, RT/RW/Kel/Kecamatan, Agama/Status/Pekerjaan) dibaca.
+4. Setelah data cukup lengkap (atau maksimal ~5 detik mencoba melengkapi), **proses berhenti otomatis** dan muncul **kartu konfirmasi** berisi semua data, masih bisa diedit.
+5. Tekan **"✓ Konfirmasi & Simpan"**:
    - Jika NIK **belum pernah terdaftar** → data baru disimpan, diberi nomor undian urut berikutnya.
-   - Jika NIK **sudah terdaftar** → tidak dibuat data baru, langsung tampil nomor undian yang sudah ada (mencegah satu orang dapat nomor dobel).
+   - Jika NIK **sudah terdaftar** → tidak dibuat data baru, langsung tampil nomor undian yang sudah ada.
 6. Nomor undian tampil besar ± 3-4 detik, lalu **otomatis kembali ke mode scan** untuk peserta berikutnya.
 
+Semua proses pemindaian & pembacaan teks berjalan **sepenuhnya di perangkat (browser)** — tidak ada foto/gambar KTP yang dikirim atau disimpan di server, hanya hasil teks akhir (NIK, nama, dst.) yang dikirim saat menekan "Konfirmasi & Simpan".
+
 ### Kalau OCR tetap salah baca
-- Sebelum menekan "Konfirmasi & Simpan", semua field di kartu konfirmasi **bisa langsung diedit** — ini kesempatan utama untuk mengoreksi.
-- Kalau baru ketahuan salah setelah tersimpan: tombol **"Batalkan"** di layar hasil (60 detik, tanpa PIN), atau edit lewat `/admin.html` (tombol "Edit" di tabel, perlu PIN) kapan saja setelahnya.
-- Kalau KTP sulit terbaca berkali-kali (rusak/pudar/pantulan cahaya), ada tombol **"Isi manual"** untuk mengetik data langsung.
-- Disarankan **uji coba dulu dengan beberapa KTP asli** sebelum hari-H untuk memastikan pencahayaan & jarak scan di lokasi cukup baik.
+- Sebelum menekan "Konfirmasi & Simpan", semua field di kartu konfirmasi **bisa langsung diedit**.
+- Kalau baru ketahuan salah setelah tersimpan: tombol **"Batalkan"** di layar hasil (60 detik, tanpa PIN), atau edit lewat `/admin.html` (perlu PIN) kapan saja setelahnya.
+- Kalau KTP sulit terbaca berkali-kali (rusak/pudar/pantulan cahaya), ada tombol **"Isi manual"**.
+- Posisi kotak-kotak sudah dikalibrasi dari contoh KTP asli, tapi kalau di lokasi acara ternyata sering meleset (misal karena model KTP daerah lain sedikit beda tata letak), kabari untuk disesuaikan lagi.
+- Disarankan **uji coba dulu dengan beberapa KTP asli** sebelum hari-H, terutama posisi mendatar (landscape) & pencahayaan yang cukup.
 
 ## 4. Saat pengundian
 

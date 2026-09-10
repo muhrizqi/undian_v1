@@ -10,7 +10,7 @@
 <body>
   <header class="topbar">
     <h1>🙋 Cek / Daftar Undian Mandiri</h1>
-    <p>Tempelkan KTP ke kamera laptop, tunggu sebentar</p>
+    <p>Posisikan KTP tepat di dalam kotak putih</p>
   </header>
 
   <div class="container">
@@ -24,19 +24,17 @@
     <div class="card" id="cameraCard" style="display:none;">
       <div class="video-wrap">
         <video id="video" autoplay playsinline muted></video>
-        <div class="scan-guide"></div>
+        <div class="guide-overlay" id="guideOverlay"></div>
         <div class="scan-state-badge" id="stateBadge">Mencari KTP...</div>
         <div class="live-panel" id="livePanel">
           <div class="lp-row"><span class="lp-label">NIK</span><span class="lp-val" id="lpNik">-</span></div>
           <div class="lp-row"><span class="lp-label">Nama</span><span class="lp-val" id="lpNama">-</span></div>
         </div>
       </div>
-      <canvas id="canvas" style="display:none;"></canvas>
-      <div class="hint">Pegang KTP tegak lurus menghadap kamera sampai berhenti otomatis.</div>
+      <div class="hint">Ratakan sisi KTP dengan kotak putih, sejajar &amp; memenuhi kotak. Hindari pantulan cahaya.</div>
       <button class="link-btn" id="btnManual">Sulit terbaca? Minta bantuan / isi manual</button>
     </div>
 
-    <!-- Kartu konfirmasi -->
     <div class="card" id="confirmCard" style="display:none;">
       <p style="text-align:center;color:var(--muted);margin-top:0;">Periksa data Anda sebelum disimpan:</p>
       <div class="nik-display" id="cNik">-</div>
@@ -97,7 +95,7 @@
 <script src="/js/ktp-ocr.js"></script>
 <script>
 const video = document.getElementById('video');
-const canvas = document.getElementById('canvas');
+const guideOverlay = document.getElementById('guideOverlay');
 const startCard = document.getElementById('startCard');
 const cameraCard = document.getElementById('cameraCard');
 const confirmCard = document.getElementById('confirmCard');
@@ -109,6 +107,8 @@ const stateBadge = document.getElementById('stateBadge');
 let worker = null;
 let running = false;
 let busy = false;
+let guideRect = null;
+let phase = 'searching';
 let stableNik = '';
 let stableCount = 0;
 let bestParsed = null;
@@ -116,7 +116,7 @@ let graceDeadline = null;
 let lastSavedNomor = null;
 let countdownTimer = null;
 
-const GRACE_MS = 4000;
+const GRACE_MS = 5000;
 
 function setStatus(msg, type) {
   statusEl.style.display = msg ? 'block' : 'none';
@@ -149,6 +149,10 @@ async function begin() {
     setStatus('', '');
     startCard.style.display = 'none';
     cameraCard.style.display = 'block';
+
+    guideRect = computeGuideRect(video.videoWidth, video.videoHeight);
+    renderGuideOverlay(guideOverlay, guideRect);
+
     resetScanState();
     running = true;
     scanLoop();
@@ -162,12 +166,15 @@ async function begin() {
 document.getElementById('btnStart').addEventListener('click', begin);
 
 function resetScanState() {
+  phase = 'searching';
   stableNik = '';
   stableCount = 0;
   bestParsed = null;
   graceDeadline = null;
+  document.getElementById('lpNik').textContent = '-';
+  document.getElementById('lpNama').textContent = '-';
   stateBadge.textContent = 'Mencari KTP...';
-  stateBadge.classList.remove('ok');
+  setGuideState(guideOverlay, '');
 }
 
 async function scanLoop() {
@@ -175,33 +182,32 @@ async function scanLoop() {
   if (busy) { setTimeout(scanLoop, 200); return; }
   busy = true;
   try {
-    const frame = captureFrame(video, canvas);
-    const text = await recognizeFrame(worker, frame);
-    const parsed = parseKTP(text);
-
-    document.getElementById('lpNik').textContent = parsed.nik || '-';
-    document.getElementById('lpNama').textContent = parsed.nama || '-';
-
-    if (isPlausible(parsed)) {
-      if (parsed.nik === stableNik) {
-        stableCount++;
+    if (phase === 'searching') {
+      const nik = await scanNikOnly(worker, video, guideRect);
+      document.getElementById('lpNik').textContent = nik || '-';
+      if (nik.length === 16) {
+        if (nik === stableNik) stableCount++; else { stableNik = nik; stableCount = 1; }
+        if (stableCount >= 2) {
+          phase = 'extracting';
+          bestParsed = { ...EMPTY_PARSED, nik: stableNik };
+          graceDeadline = Date.now() + GRACE_MS;
+          stateBadge.textContent = 'NIK terkunci, melengkapi data...';
+          setGuideState(guideOverlay, 'ok');
+        } else {
+          stateBadge.textContent = 'Membaca NIK...';
+        }
       } else {
-        stableNik = parsed.nik;
-        stableCount = 1;
-        bestParsed = null;
+        stateBadge.textContent = 'Mencari KTP...';
       }
-      bestParsed = bestParsed ? mergeParsed(bestParsed, parsed) : { ...parsed };
-
-      const coreStable = stableCount >= 2;
-      if (coreStable && !graceDeadline) graceDeadline = Date.now() + GRACE_MS;
-
-      stateBadge.textContent = coreStable ? 'Melengkapi data...' : 'Membaca... tahan posisi';
-      stateBadge.classList.toggle('ok', coreStable);
+    } else if (phase === 'extracting') {
+      const other = await scanOtherFields(worker, video, guideRect);
+      bestParsed = mergeParsed(bestParsed, { nik: stableNik, ...other });
+      document.getElementById('lpNama').textContent = bestParsed.nama || '-';
 
       const complete = isComplete(bestParsed);
-      const graceExpired = graceDeadline && Date.now() > graceDeadline;
+      const graceExpired = Date.now() > graceDeadline;
 
-      if (coreStable && (complete || graceExpired)) {
+      if (complete || graceExpired) {
         running = false;
         busy = false;
         showConfirm(bestParsed);
@@ -212,7 +218,7 @@ async function scanLoop() {
     console.error('OCR error:', e);
   }
   busy = false;
-  if (running) setTimeout(scanLoop, 180);
+  if (running) setTimeout(scanLoop, 220);
 }
 
 function showConfirm(parsed) {
