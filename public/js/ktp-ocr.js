@@ -1,31 +1,32 @@
-/* Modul bersama: kamera + OCR KTP berbasis ZONA + LABEL SEARCH.
+/* Modul bersama: kamera + OCR KTP berbasis KOLOM-NILAI + POLA ANCHOR.
    Dipakai oleh scan.html (petugas) dan self-scan.html (peserta mandiri).
 
    Riwayat pendekatan:
-   v1: baca semua teks kartu sekaligus, tebak field dari urutan baris -> rapuh,
-       satu baris gagal baca bikin semua baris di bawahnya ikut kacau.
-   v2: kotak SEMPIT per-baris (posisi presisi) -> akurat kalau kartu persis
-       pas di kotak, tapi meleset kalau KTP (dipegang tangan) sedikit saja
-       bergeser -- makin ke bawah kartu, makin melenceng.
-   v3 (sekarang): ZONA LONGGAR (beberapa baris sekaligus + padding besar),
-       lalu di dalam tiap zona dicari berdasarkan LABEL teks ("Nama", "Alamat",
-       dst), bukan posisi baris persis. Jauh lebih toleran terhadap pergeseran
-       posisi KTP di tangan, sekaligus tetap lebih akurat & cepat daripada OCR
-       satu kartu penuh karena tiap zona sudah terisolasi (lebih sedikit baris
-       yang berpotensi mengacaukan pencarian label).
+   v1: baca semua teks kartu sekaligus, tebak field dari urutan baris -> rapuh.
+   v2: kotak SEMPIT per-baris (posisi presisi, termasuk label) -> akurat kalau
+       kartu persis pas di kotak, tapi meleset kalau KTP (dipegang tangan)
+       sedikit bergeser.
+   v3: zona longgar + cari berdasarkan label teks per zona -> lebih toleran,
+       tapi label ikut ter-crop jadi masih ada noise & kadang label salah baca.
+   v4 (sekarang): crop HANYA KOLOM NILAI (tanpa kolom label sama sekali) --
+       satu kotak untuk NIK, satu kotak besar untuk "Nama" s.d. "Berlaku
+       Hingga". Karena tidak ada label, field dikenali dari POLA ISINYA
+       (anchor): baris RT/RW dikenali dari pola "angka/angka", Agama dari
+       daftar kata baku, Status Perkawinan dari kata "KAWIN", dst -- Nama
+       dan Alamat lalu diturunkan dari POSISI RELATIF terhadap anchor-anchor
+       itu (bukan dari nomor baris mutlak), jadi tetap tahan kalau satu baris
+       (misal Tempat/Tgl Lahir) gagal terbaca sama sekali.
 
    Semua proses (kamera, crop, OCR) berjalan 100% di browser (client-side) --
    tidak ada gambar/foto KTP yang dikirim ke server, hanya hasil teks akhir. */
 
 const KTP_ASPECT = 1.586; // rasio standar kartu ID (ID-1): 85.6mm x 53.98mm
 
-/* Zona (fraksi 0-1 relatif terhadap kotak panduan KTP di layar), dikalibrasi
-   dari analisis piksel KTP asli lalu diberi padding ekstra supaya toleran
-   terhadap KTP yang dipegang tangan (tidak presisi menempel kotak panduan). */
+/* Kotak (fraksi 0-1 relatif terhadap kotak panduan KTP di layar), dikalibrasi
+   dari analisis piksel KTP asli -- HANYA kolom nilai, kolom label dikecualikan. */
 const FIELD_BOXES = {
-  nik:      { x: 0.02, y: 0.13, w: 0.70, h: 0.12, label: 'NIK' },
-  dataDiri: { x: 0.02, y: 0.22, w: 0.70, h: 0.24, label: 'Nama & Alamat' },
-  dataLain: { x: 0.02, y: 0.43, w: 0.70, h: 0.31, label: 'RT/Kel/Kec/Agama/Status/Kerja' },
+  nik:        { x: 0.223, y: 0.112, w: 0.481, h: 0.112, label: 'NIK' },
+  dataValues: { x: 0.275, y: 0.222, w: 0.404, h: 0.565, label: 'Nama s.d. Berlaku Hingga' },
 };
 
 const EMPTY_PARSED = {
@@ -52,8 +53,6 @@ function stopCamera() {
   }
 }
 
-/* Buat SATU worker Tesseract yang dipakai berulang-ulang (bukan dibuat ulang
-   tiap crop) -- jauh lebih cepat karena tidak reload data bahasa tiap kali. */
 async function createOcrWorker() {
   return await Tesseract.createWorker('ind+eng');
 }
@@ -97,7 +96,7 @@ function setGuideState(overlayEl, state) {
   if (guideDiv) guideDiv.className = 'ktp-guide ' + (state || '');
 }
 
-/* ---------- CROP & OCR PER-ZONA ---------- */
+/* ---------- CROP & OCR ---------- */
 
 function fieldRectPx(guideRect, field, videoWidth, videoHeight) {
   const xFrac = guideRect.x + field.x * guideRect.w;
@@ -112,8 +111,6 @@ function fieldRectPx(guideRect, field, videoWidth, videoHeight) {
   };
 }
 
-/* Crop area dari video lalu perbesar (upscale) & naikkan kontras -- teks
-   jauh lebih mudah dibaca OCR setelah diperbesar. */
 function cropRegionCanvas(videoEl, rectPx, scale) {
   scale = scale || 2.5;
   const canvas = document.createElement('canvas');
@@ -138,78 +135,112 @@ function extractNik(text) {
   return m ? m[0].replace(/\D/g, '').slice(0, 16) : '';
 }
 
-/* ---------- PENCARIAN BERBASIS LABEL (di dalam satu zona kecil) ---------- */
+/* ---------- KLASIFIKASI NILAI BERBASIS POLA (ANCHOR) ---------- */
 
-function toLines(text) {
-  return text.split('\n').map((l) => l.trim()).filter((l) => l.length > 0);
+const AGAMA_RE = /\b(ISLAM|KRISTEN|PROTESTAN|KATOLIK|HINDU|BUDDHA|BUDHA|KONGHUCU)\b/i;
+const STATUS_RE = /\b(BELUM\s*KAWIN|KAWIN|CERAI\s*HIDUP|CERAI\s*MATI)\b/i;
+const JK_RE = /\b(LAKI\s*-?\s*LAKI|PEREMPUAN)\b/i;
+const RTRW_RE = /(\d{1,3})\s*\/\s*(\d{1,3})/;
+const DATE_RE = /\d{1,2}\s*-\s*\d{1,2}\s*-\s*\d{2,4}/;
+const WARGA_RE = /^WN[AI]$/i;
+
+function toValueLines(text) {
+  return text
+    .split('\n')
+    .map((l) => l.trim().replace(/^[:.\-\s]+/, '').trim())
+    .filter((l) => l.length > 0);
 }
 
-function valueAfterMarker(line, labelRegex) {
-  let val = line.replace(labelRegex, '').replace(/^[:\-\s.]+/, '').trim();
-  return val;
-}
-
-/* Cari baris yang cocok labelRegex, ambil teks setelah label itu (setelah
-   ':' kalau ada). Kalau baris itu ternyata cuma label tanpa isi, coba ambil
-   dari baris berikutnya (isi yang terpotong ke bawah). */
-function findLabelValue(lines, labelRegex, nextLineExcludeRegex) {
-  const idx = lines.findIndex((l) => labelRegex.test(l));
-  if (idx === -1) return '';
-  let val = valueAfterMarker(lines[idx], labelRegex);
-  if (!val && lines[idx + 1] && !(nextLineExcludeRegex && nextLineExcludeRegex.test(lines[idx + 1]))) {
-    val = lines[idx + 1].trim();
+/* Cari baris Alamat: 1-2 baris tepat sebelum baris RT/RW (alamat kadang
+   membelah 2 baris kalau panjang). Berhenti kalau mundur sampai ketemu baris
+   Jenis Kelamin/tanggal lahir, atau sampai baris Nama (index 0) -- tidak
+   pernah ikut "memakan" baris Nama. */
+function findAlamat(lines, rtrwIdx) {
+  if (rtrwIdx <= 0) {
+    return lines[3] || lines[2] || lines[1] || '';
   }
-  return val;
+  const candidates = [];
+  let idx = rtrwIdx - 1;
+  while (idx >= 1 && candidates.length < 2) {
+    const line = lines[idx];
+    if (JK_RE.test(line) || DATE_RE.test(line)) break;
+    candidates.unshift(line);
+    idx--;
+  }
+  return candidates.join(' ').trim();
 }
 
-const OTHER_LABELS = /^(rt\s*\/?\s*rw|kel\s*\/?\s*desa|kecamatan|agama|status|pekerjaan|kewarganegaraan|berlaku|tempat|jenis)/i;
+/* Klasifikasikan daftar baris (hasil OCR kolom nilai, TANPA label) menjadi
+   field-field KTP, memakai baris Agama / RT-RW / Status Perkawinan sebagai
+   "jangkar" lalu menurunkan field lain dari posisi relatif terhadap jangkar
+   itu -- bukan dari nomor baris mutlak, sehingga tahan kalau ada baris yang
+   gagal terbaca (mis. Tempat/Tgl Lahir hilang). */
+function classifyValueLines(lines) {
+  if (lines.length === 0) return { ...EMPTY_PARSED, nik: undefined };
 
-/* Fase 1 (cepat): hanya crop & baca zona NIK. Dipakai berulang-ulang saat
-   peserta masih memposisikan KTP -- jauh lebih ringan daripada membaca semua
-   zona tiap siklus. */
+  const agamaIdx = lines.findIndex((l) => AGAMA_RE.test(l));
+  const searchEndForRtRw = agamaIdx !== -1 ? agamaIdx : lines.length;
+
+  let rtrwIdx = -1;
+  for (let i = 0; i < searchEndForRtRw; i++) {
+    if (RTRW_RE.test(lines[i])) { rtrwIdx = i; break; }
+  }
+
+  const nama = lines[0] || '';
+  const alamat = findAlamat(lines, rtrwIdx);
+
+  let rt = '', rw = '';
+  if (rtrwIdx !== -1) {
+    const m = lines[rtrwIdx].match(RTRW_RE);
+    if (m) { rt = m[1]; rw = m[2]; }
+  }
+
+  let kelurahan = '', kecamatan = '';
+  if (rtrwIdx !== -1) {
+    const afterRtRw = lines.slice(rtrwIdx + 1, agamaIdx !== -1 ? agamaIdx : rtrwIdx + 3);
+    kelurahan = afterRtRw[0] || '';
+    kecamatan = afterRtRw[1] || '';
+  }
+
+  const agama = agamaIdx !== -1 ? (lines[agamaIdx].match(AGAMA_RE) || [''])[0] : '';
+
+  let statusIdx = -1;
+  const statusSearchStart = agamaIdx !== -1 ? agamaIdx + 1 : 0;
+  for (let i = statusSearchStart; i < lines.length; i++) {
+    if (STATUS_RE.test(lines[i])) { statusIdx = i; break; }
+  }
+  const status_kawin = statusIdx !== -1 ? lines[statusIdx] : '';
+
+  let pekerjaan = '';
+  if (statusIdx !== -1 && lines[statusIdx + 1] && !WARGA_RE.test(lines[statusIdx + 1])) {
+    pekerjaan = lines[statusIdx + 1];
+  }
+
+  return {
+    nama: nama.toUpperCase(),
+    alamat: alamat.toUpperCase(),
+    rt, rw,
+    kelurahan: kelurahan.toUpperCase(),
+    kecamatan: kecamatan.toUpperCase(),
+    agama: agama.toUpperCase(),
+    status_kawin: status_kawin.toUpperCase(),
+    pekerjaan: pekerjaan.toUpperCase(),
+  };
+}
+
+/* Fase 1 (cepat): hanya crop & baca kotak NIK. Dipakai berulang-ulang saat
+   peserta masih memposisikan KTP -- jauh lebih ringan daripada membaca kotak
+   nilai besar tiap siklus. */
 async function scanNikOnly(worker, videoEl, guideRect) {
   const text = await ocrRegion(worker, videoEl, guideRect, FIELD_BOXES.nik);
   return extractNik(text);
 }
 
-/* Fase 2: setelah NIK terkunci (stabil), baru baca zona-zona lainnya. */
+/* Fase 2: setelah NIK terkunci (stabil), baru baca kotak nilai besar. */
 async function scanOtherFields(worker, videoEl, guideRect) {
-  const dataDiriText = await ocrRegion(worker, videoEl, guideRect, FIELD_BOXES.dataDiri);
-  const dataLainText = await ocrRegion(worker, videoEl, guideRect, FIELD_BOXES.dataLain);
-
-  const ddLines = toLines(dataDiriText);
-  const nama = findLabelValue(ddLines, /^nama\b/i, OTHER_LABELS);
-  let alamat = findLabelValue(ddLines, /^alamat\b/i, OTHER_LABELS);
-  // Alamat kadang membelah ke baris berikutnya (sebelum RT/RW) -- kalau baris
-  // setelah "Alamat" bukan label lain, gabungkan sebagai lanjutan alamat.
-  const alamatIdx = ddLines.findIndex((l) => /^alamat\b/i.test(l));
-  if (alamatIdx !== -1 && ddLines[alamatIdx + 1] && !OTHER_LABELS.test(ddLines[alamatIdx + 1])) {
-    const cont = ddLines[alamatIdx + 1].trim();
-    if (cont && cont.toUpperCase() !== alamat.toUpperCase()) alamat = (alamat + ' ' + cont).trim();
-  }
-
-  const dlLines = toLines(dataLainText);
-  const rtrwLine = dlLines.find((l) => /rt\s*\/?\s*rw/i.test(l)) || '';
-  const kelurahan = findLabelValue(dlLines, /^kel\s*\/?\s*desa\b/i, OTHER_LABELS);
-  const kecamatan = findLabelValue(dlLines, /^kecamatan\b/i, OTHER_LABELS);
-  const agama = findLabelValue(dlLines, /^agama\b/i, OTHER_LABELS);
-  const status_kawin = findLabelValue(dlLines, /^status\s*perkawinan\b/i, OTHER_LABELS);
-  const pekerjaan = findLabelValue(dlLines, /^pekerjaan\b/i, OTHER_LABELS);
-
-  let rt = '', rw = '';
-  const m = rtrwLine.match(/(\d{1,3})\s*\/\s*(\d{1,3})/);
-  if (m) { rt = m[1]; rw = m[2]; }
-
-  return {
-    nama: (nama || '').toUpperCase(),
-    alamat: (alamat || '').toUpperCase(),
-    rt, rw,
-    kelurahan: (kelurahan || '').toUpperCase(),
-    kecamatan: (kecamatan || '').toUpperCase(),
-    agama: (agama || '').toUpperCase(),
-    status_kawin: (status_kawin || '').toUpperCase(),
-    pekerjaan: (pekerjaan || '').toUpperCase(),
-  };
+  const text = await ocrRegion(worker, videoEl, guideRect, FIELD_BOXES.dataValues);
+  const lines = toValueLines(text);
+  return classifyValueLines(lines);
 }
 
 /* ---------- VALIDASI ---------- */

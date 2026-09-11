@@ -113,7 +113,7 @@ Tip: buat kode QR dari masing-masing alamat supaya petugas & peserta tinggal sca
 
 1. Petugas/peserta tekan **"Mulai Scan"** sekali di awal — kamera & mesin baca teks disiapkan (±3-5 detik).
 2. Di layar muncul **kotak putih berbentuk KTP** dengan kotak-kotak kuning putus-putus menandai posisi NIK, Nama, Alamat, dst. — posisikan kartu fisik supaya pas mengisi kotak putih tersebut (mendatar/landscape).
-3. Sistem membaca dalam **3 zona longgar** (bukan kotak sempit per-baris) — NIK, lalu "Nama & Alamat" jadi satu zona, lalu "RT/Kel/Kec/Agama/Status/Pekerjaan" jadi satu zona. Di dalam tiap zona, sistem **mencari berdasarkan label teks** ("Nama", "Alamat", "Agama", dst — bukan menebak posisi baris persis), jadi tetap akurat walau KTP yang dipegang tangan sedikit bergeser dari kotak panduan.
+3. Sistem membaca dalam **2 kotak** — kotak **NIK**, dan satu kotak besar berisi **kolom nilai saja** (tanpa kolom label) dari "Nama" sampai "Berlaku Hingga". Di dalam kotak besar ini, tiap baris dikenali dari **pola isinya**, bukan urutan baris: baris RT/RW dikenali dari pola "angka/angka", Agama dari daftar kata baku (Islam/Kristen/dst), Status Perkawinan dari kata "Kawin" — lalu Nama dan Alamat diturunkan dari posisi relatif terhadap pola-pola itu. Ini membuat pembacaan tetap akurat walau satu baris (misal Tempat/Tgl Lahir) gagal terbaca sama sekali, karena field lain tidak ikut bergeser posisinya.
 4. Setelah data cukup lengkap (atau maksimal ~5 detik mencoba melengkapi), **proses berhenti otomatis** dan muncul **kartu konfirmasi** berisi semua data, masih bisa diedit.
 5. Tekan **"✓ Konfirmasi & Simpan"**:
    - Jika NIK **belum pernah terdaftar** → data baru disimpan, diberi nomor undian urut berikutnya.
@@ -126,7 +126,8 @@ Semua proses pemindaian & pembacaan teks berjalan **sepenuhnya di perangkat (bro
 - Sebelum menekan "Konfirmasi & Simpan", semua field di kartu konfirmasi **bisa langsung diedit**.
 - Kalau baru ketahuan salah setelah tersimpan: tombol **"Batalkan"** di layar hasil (60 detik, tanpa PIN), atau edit lewat `/admin.html` (perlu PIN) kapan saja setelahnya.
 - Kalau KTP sulit terbaca berkali-kali (rusak/pudar/pantulan cahaya), ada tombol **"Isi manual"**.
-- Posisi zona sudah dikalibrasi & diuji dari 2 contoh KTP asli (Kediri &amp; Yogyakarta) dengan tata letak gelar/alamat yang berbeda, dan diberi padding longgar supaya toleran terhadap KTP yang dipegang tangan (tidak perlu presisi pixel-perfect). Kalau di lapangan ternyata masih sering meleset untuk model KTP tertentu, kirim contoh fotonya dan akan dikalibrasi ulang.
+- Posisi kotak sudah dikalibrasi presisi dari 2 contoh KTP asli (Kediri &amp; Yogyakarta) dengan tata letak gelar/alamat yang berbeda, dan diuji tahan terhadap kasus 1-2 baris yang gagal terbaca sama sekali. Kalau di lapangan ternyata masih sering meleset untuk model KTP tertentu, kirim contoh fotonya dan akan dikalibrasi ulang.
+- Field **Nama** khususnya bergantung pada baris pertama di dalam kotak besar terbaca dengan benar (karena tidak ada pola khas untuk mengenali "ini baris Nama" selain posisinya paling atas) — jadi pastikan bagian atas KTP (baris Nama) tidak terpotong di luar kotak panduan saat memposisikan kartu.
 - Disarankan **uji coba dulu dengan beberapa KTP asli** sebelum hari-H, terutama posisi mendatar (landscape) & pencahayaan yang cukup.
 
 ## 4. Saat pengundian
