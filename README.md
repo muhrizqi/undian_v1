@@ -128,6 +128,8 @@ Semua proses pemindaian & pembacaan teks berjalan **sepenuhnya di perangkat (bro
 - Kalau KTP sulit terbaca berkali-kali (rusak/pudar/pantulan cahaya), ada tombol **"Isi manual"**.
 - Posisi kotak sudah dikalibrasi presisi dari 2 contoh KTP asli (Kediri &amp; Yogyakarta) dengan tata letak gelar/alamat yang berbeda, dan diuji tahan terhadap kasus 1-2 baris yang gagal terbaca sama sekali. Kalau di lapangan ternyata masih sering meleset untuk model KTP tertentu, kirim contoh fotonya dan akan dikalibrasi ulang.
 - Field **Nama** khususnya bergantung pada baris pertama di dalam kotak besar terbaca dengan benar (karena tidak ada pola khas untuk mengenali "ini baris Nama" selain posisinya paling atas) — jadi pastikan bagian atas KTP (baris Nama) tidak terpotong di luar kotak panduan saat memposisikan kartu.
+- Untuk akurasi & kecepatan, sistem memberi tahu Tesseract secara eksplisit bentuk tiap kotak (1 baris untuk NIK, 1 blok kolom teks untuk kotak data) alih-alih menebak tata letak sendiri, dan tiap crop di-threshold hitam-putih otomatis (metode Otsu) untuk menghilangkan pola gelombang pengaman cetak di background KTP yang bisa mengecoh OCR. Kotak data besar juga dibaca sebagai 2 potongan internal (Nama/Alamat, lalu RT-RW s.d. Pekerjaan) — walau tampil sebagai satu kotak saja di layar — supaya lebih sedikit baris per pembacaan.
+- Golongan Darah yang ikut terbaca di baris Jenis Kelamin (karena satu baris dengan LAKI-LAKI/PEREMPUAN) otomatis diabaikan — tidak memengaruhi field lain.
 - Disarankan **uji coba dulu dengan beberapa KTP asli** sebelum hari-H, terutama posisi mendatar (landscape) & pencahayaan yang cukup.
 
 ## 4. Saat pengundian
