@@ -25,27 +25,42 @@ const KTP_ASPECT = 1.586; // rasio standar kartu ID (ID-1): 85.6mm x 53.98mm
 /* Kotak (fraksi 0-1 relatif terhadap kotak panduan KTP di layar), dikalibrasi
    dari analisis piksel KTP asli -- HANYA kolom nilai, kolom label dikecualikan.
    "dataValues" adalah SATU kotak yang tampil ke pengguna (gampang diposisikan),
-   tapi secara internal di-crop & di-OCR sebagai 2 bagian terpisah (lihat
-   DATA_SPLIT_RATIO) -- makin sedikit baris per pemanggilan OCR, makin kecil
-   risiko Tesseract salah menggabung/memisah baris. */
+   tapi secara internal di-crop & di-OCR sebagai 3 bagian terpisah: Nama saja,
+   Alamat saja, lalu RT/RW s.d. Pekerjaan. Alamat sengaja DIPISAH dari Nama
+   dan tidak menyentuh baris Jenis Kelamin/Gol.Darah sama sekali -- baris itu
+   di lapangan sering terbaca sangat kacau ("LAKHLAKI", "CAKI-CAKI") sehingga
+   tidak bisa diandalkan sebagai penanda batas. Dengan memberi Alamat kotak
+   sendiri yang sudah dijaga jaraknya dari baris itu, masalah itu hilang sama
+   sekali tanpa perlu mendeteksinya. */
 const FIELD_BOXES = {
   nik:        { x: 0.223, y: 0.112, w: 0.481, h: 0.112, label: 'NIK' },
   dataValues: { x: 0.275, y: 0.222, w: 0.404, h: 0.565, label: 'Nama s.d. Berlaku Hingga' },
 };
 
-// Porsi bagian atas (Nama..Alamat) dari tinggi kotak dataValues; sisanya
-// (RT/RW..Pekerjaan) jadi crop OCR kedua. Titik potong ini pas di antara
-// baris Alamat dan RT/RW berdasarkan kalibrasi piksel KTP asli.
-const DATA_SPLIT_RATIO = 0.40;
+// Titik potong (fraksi dari tinggi kotak dataValues) untuk 3 crop internal.
+// Dikalibrasi presisi dari posisi baris asli (fraksi LOKAL terhadap tinggi
+// dataValues, diukur langsung dari piksel KTP asli): Nama 0.028-0.089,
+// Tempat/Tgl Lahir 0.109-0.172, Jenis Kelamin+Gol.Darah 0.189-0.252,
+// Alamat 0.270-0.330, RT/RW mulai 0.352. Kotak Alamat sengaja dimulai
+// SETELAH ujung baris Jenis Kelamin (0.252) dengan jarak aman -- baris itu
+// di lapangan sering terbaca kacau ("LAKHLAKI", "CAKI-CAKI") sehingga tidak
+// boleh ikut ter-crop sama sekali, bukan sekadar "diabaikan lewat deteksi".
+const NAMA_BOX_H_RATIO = 0.10;      // 0 - 0.10: baris Nama + jarak aman (Nama berakhir di 0.089)
+const ALAMAT_BOX_Y_RATIO = 0.26;    // mulai 0.26 (aman setelah Jenis Kelamin berakhir di 0.252)
+const ALAMAT_BOX_H_RATIO = 0.09;    // s.d. 0.35 (melewati akhir Alamat di 0.330, sebelum RT/RW di 0.352)
+const DATA_BOTTOM_Y_RATIO = 0.34;   // RT/RW (mulai 0.352) s.d. akhir kotak
 
-function getDataTopBox() {
+function getNamaBox() {
   const d = FIELD_BOXES.dataValues;
-  return { x: d.x, y: d.y, w: d.w, h: d.h * DATA_SPLIT_RATIO };
+  return { x: d.x, y: d.y, w: d.w, h: d.h * NAMA_BOX_H_RATIO };
+}
+function getAlamatBox() {
+  const d = FIELD_BOXES.dataValues;
+  return { x: d.x, y: d.y + d.h * ALAMAT_BOX_Y_RATIO, w: d.w, h: d.h * ALAMAT_BOX_H_RATIO };
 }
 function getDataBottomBox() {
   const d = FIELD_BOXES.dataValues;
-  const topH = d.h * DATA_SPLIT_RATIO;
-  return { x: d.x, y: d.y + topH, w: d.w, h: d.h - topH };
+  return { x: d.x, y: d.y + d.h * DATA_BOTTOM_Y_RATIO, w: d.w, h: d.h * (1 - DATA_BOTTOM_Y_RATIO) };
 }
 
 const EMPTY_PARSED = {
@@ -181,26 +196,44 @@ function cropRegionCanvas(videoEl, rectPx, scale) {
   return canvas;
 }
 
-// PSM (page segmentation mode) Tesseract: '7' = anggap gambar sebagai SATU
-// baris teks (dipakai untuk kotak NIK -- lebih cepat & akurat daripada mode
-// otomatis karena tidak perlu menebak tata letak). '6' = anggap gambar
-// sebagai SATU blok kolom teks seragam (dipakai untuk kotak data Nama/Alamat
-// & RT-RW/Agama/dst -- beberapa baris pendek yang rapi).
-const PSM_SINGLE_LINE = '7';
-const PSM_SINGLE_BLOCK = '6';
-let lastPsm = null;
-
-async function setPsm(worker, psm) {
-  if (lastPsm === psm) return;
-  await worker.setParameters({ tessedit_pageseg_mode: psm });
-  lastPsm = psm;
+// Mode OCR Tesseract, disesuaikan per jenis kotak supaya lebih cepat & akurat
+// daripada mode otomatis (yang harus menebak tata letak tiap kali):
+//  - 'digits'   NIK: satu baris, HANYA karakter angka diperbolehkan.
+//  - 'nameline' Nama: satu baris, kamus Bahasa Indonesia dimatikan (supaya
+//                nama orang yang bukan kata baku tidak "dikoreksi paksa"
+//                oleh Tesseract jadi kata lain yang mirip).
+//  - 'block'    Alamat & kotak data bawah: satu blok kolom teks pendek.
+let lastOcrMode = null;
+async function setOcrMode(worker, mode) {
+  if (lastOcrMode === mode) return;
+  if (mode === 'digits') {
+    await worker.setParameters({
+      tessedit_pageseg_mode: '7',
+      tessedit_char_whitelist: '0123456789',
+    });
+  } else if (mode === 'nameline') {
+    await worker.setParameters({
+      tessedit_pageseg_mode: '7',
+      tessedit_char_whitelist: '',
+      load_system_dawg: '0',
+      load_freq_dawg: '0',
+    });
+  } else {
+    await worker.setParameters({
+      tessedit_pageseg_mode: '6',
+      tessedit_char_whitelist: '',
+      load_system_dawg: '1',
+      load_freq_dawg: '1',
+    });
+  }
+  lastOcrMode = mode;
 }
 
-async function ocrRegion(worker, videoEl, guideRect, field, psm) {
+async function ocrRegion(worker, videoEl, guideRect, field, mode) {
   const vw = videoEl.videoWidth, vh = videoEl.videoHeight;
   const rectPx = fieldRectPx(guideRect, field, vw, vh);
   const canvas = cropRegionCanvas(videoEl, rectPx);
-  if (psm) await setPsm(worker, psm);
+  if (mode) await setOcrMode(worker, mode);
   const { data } = await worker.recognize(canvas);
   return (data.text || '').trim();
 }
@@ -214,63 +247,53 @@ function extractNik(text) {
 
 const AGAMA_RE = /\b(ISLAM|KRISTEN|PROTESTAN|KATOLIK|HINDU|BUDDHA|BUDHA|KONGHUCU)\b/i;
 const STATUS_RE = /\b(BELUM\s*KAWIN|KAWIN|CERAI\s*HIDUP|CERAI\s*MATI)\b/i;
-const JK_RE = /\b(LAKI\s*-?\s*LAKI|PEREMPUAN)\b/i;
 const RTRW_RE = /(\d{1,3})\s*\/\s*(\d{1,3})/;
-const DATE_RE = /\d{1,2}\s*-\s*\d{1,2}\s*-\s*\d{2,4}/;
+// Baris yang isinya cuma deretan angka sepanjang RT/RW (kadang garis miringnya
+// gagal terbaca jadi "047012" tanpa "/") -- dipakai untuk MEMBUANG baris RT/RW
+// yang nyasar ke crop Alamat, bukan untuk mengekstrak RT/RW yang sebenarnya.
+const RTRW_LOOSE_RE = /^\d{2,3}\D{0,2}\d{2,3}$/;
 const WARGA_RE = /^WN[AI]$/i;
 
 function toValueLines(text) {
   return text
     .split('\n')
-    .map((l) => l.trim().replace(/^[:.\-\s]+/, '').trim())
+    .map((l) =>
+      l
+        .trim()
+        .replace(/^[:.\-\s]+/, '') // buang tanda baca nyasar di awal baris
+        .replace(/^[A-Za-z]{1,4}\s*:\s*/, '') // buang sisa ekor label + ":" yang ikut ter-crop (mis. "AN: KAWIN" -> "KAWIN")
+        .trim()
+    )
     .filter((l) => l.length > 0);
 }
 
-/* Cari baris Alamat: 1-2 baris tepat sebelum baris RT/RW (alamat kadang
-   membelah 2 baris kalau panjang). Berhenti kalau mundur sampai ketemu baris
-   Jenis Kelamin/tanggal lahir, atau sampai baris Nama (index 0) -- tidak
-   pernah ikut "memakan" baris Nama. */
-function findAlamat(lines, rtrwIdx) {
-  if (rtrwIdx <= 0) {
-    return lines[3] || lines[2] || lines[1] || '';
-  }
-  const candidates = [];
-  let idx = rtrwIdx - 1;
-  while (idx >= 1 && candidates.length < 2) {
-    const line = lines[idx];
-    if (JK_RE.test(line) || DATE_RE.test(line)) break;
-    candidates.unshift(line);
-    idx--;
-  }
-  return candidates.join(' ').trim();
+/* Cari baris Alamat dari hasil crop kotak Alamat (yang sudah terpisah &
+   berjarak aman dari baris Jenis Kelamin/Gol.Darah -- jadi tidak perlu lagi
+   mendeteksi baris itu sebagai batas). Alamat bisa 1-2 baris; gabungkan
+   semua baris KECUALI yang ternyata deretan angka RT/RW yang nyasar ikut
+   ter-crop di ujung bawah. */
+function extractAlamat(lines) {
+  const clean = lines.filter((l) => !RTRW_LOOSE_RE.test(l.replace(/\s/g, '')));
+  return clean.slice(0, 2).join(' ').trim();
 }
 
-/* Klasifikasikan bagian ATAS (Nama, Alamat) dari kotak nilai. */
-function classifyTopLines(lines) {
-  const nama = lines[0] || '';
-  // Tidak ada RT/RW di potongan ini -- anggap ujung array sebagai batas,
-  // findAlamat akan mundur dari situ mencari 1-2 baris alamat.
-  const alamat = findAlamat(lines, lines.length);
-  return {
-    nama: nama.toUpperCase(),
-    alamat: alamat.toUpperCase(),
-  };
-}
-
-/* Klasifikasikan bagian BAWAH (RT/RW, Kel/Desa, Kecamatan, Agama, Status,
-   Pekerjaan) dari kotak nilai, memakai Agama & RT/RW sebagai jangkar. */
+/* Klasifikasikan kotak RT/RW s.d. Pekerjaan, memakai Agama & RT/RW sebagai
+   "jangkar" lalu menurunkan field lain dari posisi relatif terhadap jangkar
+   itu -- bukan dari nomor baris mutlak, sehingga tahan kalau ada baris yang
+   gagal terbaca. */
 function classifyBottomLines(lines) {
   const agamaIdx = lines.findIndex((l) => AGAMA_RE.test(l));
   const searchEndForRtRw = agamaIdx !== -1 ? agamaIdx : lines.length;
 
   let rtrwIdx = -1;
   for (let i = 0; i < searchEndForRtRw; i++) {
-    if (RTRW_RE.test(lines[i])) { rtrwIdx = i; break; }
+    if (RTRW_RE.test(lines[i]) || RTRW_LOOSE_RE.test(lines[i].replace(/\s/g, ''))) { rtrwIdx = i; break; }
   }
 
   let rt = '', rw = '';
   if (rtrwIdx !== -1) {
-    const m = lines[rtrwIdx].match(RTRW_RE);
+    const raw = lines[rtrwIdx].replace(/\s/g, '');
+    const m = raw.match(/(\d{1,3})\D{0,2}(\d{1,3})/);
     if (m) { rt = m[1]; rw = m[2]; }
   }
 
@@ -288,7 +311,7 @@ function classifyBottomLines(lines) {
   for (let i = statusSearchStart; i < lines.length; i++) {
     if (STATUS_RE.test(lines[i])) { statusIdx = i; break; }
   }
-  const status_kawin = statusIdx !== -1 ? lines[statusIdx] : '';
+  const status_kawin = statusIdx !== -1 ? (lines[statusIdx].match(STATUS_RE) || [''])[0] : '';
 
   let pekerjaan = '';
   if (statusIdx !== -1 && lines[statusIdx + 1] && !WARGA_RE.test(lines[statusIdx + 1])) {
@@ -305,23 +328,31 @@ function classifyBottomLines(lines) {
   };
 }
 
-/* Fase 1 (cepat): hanya crop & baca kotak NIK, dengan PSM "satu baris" --
-   lebih cepat & akurat daripada mode otomatis. Dipakai berulang-ulang saat
-   peserta masih memposisikan KTP. */
+/* Fase 1 (cepat): hanya crop & baca kotak NIK, dengan mode "satu baris,
+   khusus angka" -- lebih cepat & akurat daripada mode otomatis. Dipakai
+   berulang-ulang saat peserta masih memposisikan KTP. */
 async function scanNikOnly(worker, videoEl, guideRect) {
-  const text = await ocrRegion(worker, videoEl, guideRect, FIELD_BOXES.nik, PSM_SINGLE_LINE);
+  const text = await ocrRegion(worker, videoEl, guideRect, FIELD_BOXES.nik, 'digits');
   return extractNik(text);
 }
 
-/* Fase 2: setelah NIK terkunci (stabil), baca kotak data dalam 2 potongan
-   (atas: Nama & Alamat, bawah: RT/RW s.d. Pekerjaan) dengan PSM "satu blok
-   kolom teks" -- lebih sedikit baris per pemanggilan = lebih akurat. */
+/* Fase 2: setelah NIK terkunci (stabil), baca 3 kotak: Nama saja, Alamat
+   saja, lalu RT/RW s.d. Pekerjaan -- masing-masing dengan mode OCR yang
+   paling sesuai isinya. */
 async function scanOtherFields(worker, videoEl, guideRect) {
-  const topText = await ocrRegion(worker, videoEl, guideRect, getDataTopBox(), PSM_SINGLE_BLOCK);
-  const bottomText = await ocrRegion(worker, videoEl, guideRect, getDataBottomBox(), PSM_SINGLE_BLOCK);
-  const top = classifyTopLines(toValueLines(topText));
+  const namaText = await ocrRegion(worker, videoEl, guideRect, getNamaBox(), 'nameline');
+  const alamatText = await ocrRegion(worker, videoEl, guideRect, getAlamatBox(), 'block');
+  const bottomText = await ocrRegion(worker, videoEl, guideRect, getDataBottomBox(), 'block');
+
+  const namaLines = toValueLines(namaText);
+  const alamatLines = toValueLines(alamatText);
   const bottom = classifyBottomLines(toValueLines(bottomText));
-  return { ...top, ...bottom };
+
+  return {
+    nama: (namaLines[0] || '').toUpperCase(),
+    alamat: extractAlamat(alamatLines).toUpperCase(),
+    ...bottom,
+  };
 }
 
 /* ---------- VALIDASI ---------- */
